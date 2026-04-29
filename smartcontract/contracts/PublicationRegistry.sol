@@ -242,7 +242,7 @@ contract PublicationRegistry is
             return;
         }
 
-        // Plagiarism check passed — request reviewer assignment via VRF
+        // Plagiarism check passed — request reviewer assignment
         ms.status = Status.UNDER_REVIEW;
         emit DecisionMade(msId, Status.UNDER_REVIEW);
 

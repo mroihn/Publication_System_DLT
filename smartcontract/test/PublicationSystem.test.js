@@ -4,10 +4,9 @@ const { ethers, upgrades } = require("hardhat");
 /**
  * Integration tests for the Decentralized Publication System.
  *
- * Since Chainlink VRF and Functions are external services, these tests
- * simulate the oracle callbacks by having the oracle contract's role
- * granted to a test account, and calling the fulfillment functions directly
- * on PublicationRegistry.
+ * Tests use a MockReviewOracle that implements the IReviewOracle interface
+ * as no-ops, allowing the test harness to call fulfillment functions
+ * directly on PublicationRegistry to simulate the oracle callback flow.
  */
 describe("Publication System", function () {
   // Contracts
@@ -147,8 +146,7 @@ describe("Publication System", function () {
     /**
      * NOTE: submitManuscript calls reviewOracle.requestPlagiarismCheck(),
      * which would revert since admin doesn't implement that interface.
-     * For the direct lifecycle test, we test the state machine by calling
-     * fulfillPlagiarism directly (simulating the oracle callback).
+     * The state machine tests below use MockReviewOracle instead.
      */
   });
 
@@ -302,7 +300,7 @@ describe("Publication System", function () {
         .submitManuscript(CID, METADATA);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
 
-      // Simulate VRF callback assigning reviewers
+      // Simulate oracle callback assigning reviewers
       const reviewers = [
         reviewer1.address,
         reviewer2.address,

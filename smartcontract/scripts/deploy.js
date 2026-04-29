@@ -6,12 +6,12 @@ const { ethers, upgrades } = require("hardhat");
  * Deployment order (dependency-aware):
  *   1. JournalToken  (ERC-20)
  *   2. DOIToken      (ERC-721)
- *   3. ReviewOracle  (Chainlink VRF v2.5 + Functions)
+ *   3. ReviewOracle  (Custom Oracle)
  *   4. PublicationRegistry (UUPS Proxy)
  *   5. Post-deployment configuration (roles, permissions)
  *
  * Required environment variables:
- *   PRIVATE_KEY, VRF_SUBSCRIPTION_ID, FUNCTIONS_SUBSCRIPTION_ID
+ *   PRIVATE_KEY
  */
 async function main() {
   const [deployer] = await ethers.getSigners();
@@ -22,25 +22,8 @@ async function main() {
     "POL"
   );
 
-  // ─────────────────── Configuration ───────────────────
-
-  // Polygon Amoy Chainlink VRF v2.5
-  const VRF_COORDINATOR = "0x343300b5d84D444B2ADc9116FEF1bED02BE49Cf2";
-  const VRF_KEY_HASH =
-    "0x816bedba8a50b294e5cbd47842baf240c2385f2eaf719edbd4f250a137a8c899";
-  const VRF_SUB_ID = process.env.VRF_SUBSCRIPTION_ID || "0";
-
-  // Polygon Amoy Chainlink Functions
-  const FUNCTIONS_ROUTER = "0xC22a79eBA640940ABB6dF0f7982cc119578E11De";
-  const FUNCTIONS_SUB_ID = process.env.FUNCTIONS_SUBSCRIPTION_ID || "0";
-  const DON_ID = ethers.encodeBytes32String("fun-polygon-amoy-1");
-
   // JournalToken initial supply (in whole tokens)
   const INITIAL_JRT_SUPPLY = 1_000_000;
-
-  console.log("\n─── Configuration ───");
-  console.log("  VRF Subscription ID:", VRF_SUB_ID);
-  console.log("  Functions Subscription ID:", FUNCTIONS_SUB_ID);
 
   // ─────────────────── 1. Deploy JournalToken ───────────────────
 
@@ -64,14 +47,7 @@ async function main() {
 
   console.log("\n[3/4] Deploying ReviewOracle...");
   const ReviewOracle = await ethers.getContractFactory("ReviewOracle");
-  const reviewOracle = await ReviewOracle.deploy(
-    VRF_COORDINATOR,
-    VRF_KEY_HASH,
-    VRF_SUB_ID,
-    FUNCTIONS_ROUTER,
-    FUNCTIONS_SUB_ID,
-    DON_ID
-  );
+  const reviewOracle = await ReviewOracle.deploy();
   await reviewOracle.waitForDeployment();
   const reviewOracleAddr = await reviewOracle.getAddress();
   console.log("  ReviewOracle deployed at:", reviewOracleAddr);
@@ -120,13 +96,11 @@ async function main() {
   console.log(`║ PublicationRegistry   : ${registryAddr} ║`);
   console.log("╠══════════════════════════════════════════════════╣");
   console.log("║ NEXT STEPS:                                      ║");
-  console.log("║  1. Add ReviewOracle as VRF consumer              ║");
-  console.log("║  2. Fund VRF subscription with LINK               ║");
-  console.log("║  3. Add ReviewOracle as Functions consumer         ║");
-  console.log("║  4. Fund Functions subscription with LINK          ║");
-  console.log("║  5. Add reviewers via ReviewOracle.addReviewer()   ║");
-  console.log("║  6. Grant REVIEWER_ROLE on Registry               ║");
-  console.log("║  7. Grant RESEARCHER_ROLE to users                 ║");
+  console.log("║  1. Add reviewers via ReviewOracle.addReviewer()   ║");
+  console.log("║  2. Grant REVIEWER_ROLE on Registry               ║");
+  console.log("║  3. Grant RESEARCHER_ROLE to users                 ║");
+  console.log("║  4. Set up off-chain oracle to listen for          ║");
+  console.log("║     PlagiarismCheckRequested events                ║");
   console.log("╚══════════════════════════════════════════════════╝");
 
   // Return addresses for verification scripts

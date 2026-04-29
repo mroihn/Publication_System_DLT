@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
-import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
-import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
-import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
@@ -22,73 +18,32 @@ interface IPublicationRegistryCallback {
 
 /**
  * @title ReviewOracle
- * @notice Chainlink VRF v2.5 + Chainlink Functions oracle contract.
+ * @notice Custom oracle contract for the decentralized publication system.
  *
- *  • VRF v2.5  – used to randomly select reviewers from a registered pool.
- *  • Functions – used to call an external plagiarism-check API and return
- *                the similarity score on-chain.
+ *  • Plagiarism checking — an off-chain ORACLE_ROLE operator submits scores.
+ *  • Reviewer selection  — uses on-chain pseudo-randomness (block-based)
+ *                          to select reviewers from a registered pool.
  *
  * @dev Only the PublicationRegistry contract (set via `setPublicationRegistry`)
- *      is allowed to initiate oracle requests. Callbacks are routed back to
- *      PublicationRegistry via the `IPublicationRegistryCallback` interface.
+ *      is allowed to initiate oracle requests. An authorized ORACLE_ROLE
+ *      address (the off-chain oracle operator) fulfills plagiarism checks.
  *
- *      Polygon Amoy Testnet configuration:
- *        VRF Coordinator : 0x343300b5d84D444B2ADc9116FEF1bED02BE49Cf2
- *        Key Hash        : 0x816bedba8a50b294e5cbd47842baf240c2385f2eaf719edbd4f250a137a8c899
- *        Functions Router : 0xC22a79eBA640940ABB6dF0f7982cc119578E11De
- *        DON ID          : fun-polygon-amoy-1
+ *      Reviewer selection uses keccak256(abi.encodePacked(block.prevrandao,
+ *      block.timestamp, msId)) as the randomness seed. This is suitable for
+ *      a testnet / academic publication system where the economic incentive
+ *      to manipulate block randomness is negligible.
  */
-contract ReviewOracle is VRFConsumerBaseV2Plus, FunctionsClient, AccessControl {
-    using FunctionsRequest for FunctionsRequest.Request;
-
+contract ReviewOracle is AccessControl {
     // ──────────────────────────────── Constants ────────────────────────────────────
 
     /// @notice Role for the PublicationRegistry contract.
     bytes32 public constant REGISTRY_ROLE = keccak256("REGISTRY_ROLE");
 
+    /// @notice Role for the off-chain oracle operator that submits plagiarism scores.
+    bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
+
     /// @notice Number of reviewers to select per manuscript.
     uint256 public constant NUM_REVIEWERS = 3;
-
-    // ──────────────────────── Chainlink VRF v2.5 Config ───────────────────────────
-
-    /// @notice Key hash (gas lane) for Polygon Amoy.
-    bytes32 public immutable i_keyHash;
-
-    /// @notice VRF subscription ID.
-    uint256 public immutable i_vrfSubId;
-
-    /// @notice Callback gas limit for VRF fulfillment.
-    uint32 public constant VRF_CALLBACK_GAS_LIMIT = 300_000;
-
-    /// @notice Number of block confirmations before VRF response.
-    uint16 public constant VRF_REQUEST_CONFIRMATIONS = 3;
-
-    /// @notice Number of random words requested (1 is enough to derive 3 indices).
-    uint32 public constant VRF_NUM_WORDS = 1;
-
-    // ────────────────────── Chainlink Functions Config ─────────────────────────────
-
-    /// @notice Functions subscription ID.
-    uint64 public immutable i_functionsSubId;
-
-    /// @notice DON ID for Polygon Amoy (bytes32 encoding of "fun-polygon-amoy-1").
-    bytes32 public immutable i_donId;
-
-    /// @notice Callback gas limit for Functions fulfillment.
-    uint32 public constant FUNCTIONS_CALLBACK_GAS_LIMIT = 300_000;
-
-    /**
-     * @notice JavaScript source executed by the Chainlink Functions DON.
-     *         It fetches a plagiarism score for a given IPFS CID.
-     *         The CID is passed as the first (and only) argument.
-     */
-    string public constant PLAGIARISM_JS_SOURCE =
-        "const cid = args[0];"
-        "const res = await Functions.makeHttpRequest({"
-        "  url: `https://api.example.com/plagiarism?cid=${cid}`"
-        "});"
-        "if (res.error) throw Error('API error');"
-        "return Functions.encodeUint256(res.data.score);";
 
     // ──────────────────────────────── State ────────────────────────────────────────
 
@@ -98,11 +53,14 @@ contract ReviewOracle is VRFConsumerBaseV2Plus, FunctionsClient, AccessControl {
     /// @notice Pool of registered reviewer addresses.
     address[] public reviewerPool;
 
-    /// @notice VRF requestId → manuscript ID.
-    mapping(uint256 => uint256) public vrfRequestToMs;
+    /// @notice Auto-incrementing request ID counter for plagiarism checks.
+    uint256 public nextRequestId;
 
-    /// @notice Functions requestId → manuscript ID.
-    mapping(bytes32 => uint256) public funcRequestToMs;
+    /// @notice Request ID → manuscript ID (for plagiarism check tracking).
+    mapping(uint256 => uint256) public requestToMs;
+
+    /// @notice Request ID → whether the request has been fulfilled.
+    mapping(uint256 => bool) public requestFulfilled;
 
     // ──────────────────────────────── Custom Errors ────────────────────────────────
 
@@ -111,46 +69,40 @@ contract ReviewOracle is VRFConsumerBaseV2Plus, FunctionsClient, AccessControl {
     error ReviewerAlreadyRegistered(address reviewer);
     error ReviewerNotFound(address reviewer);
     error OracleZeroAddress();
+    error RequestAlreadyFulfilled(uint256 requestId);
+    error RequestNotFound(uint256 requestId);
+    error InvalidScore(uint256 score);
 
     // ──────────────────────────────── Events ───────────────────────────────────────
 
-    event PlagiarismCheckRequested(uint256 indexed msId, bytes32 requestId);
-    event PlagiarismCheckFulfilled(uint256 indexed msId, uint256 score);
-    event RandomReviewersRequested(uint256 indexed msId, uint256 requestId);
-    event RandomReviewersFulfilled(
+    /// @notice Emitted when a plagiarism check is requested (consumed by off-chain oracle).
+    event PlagiarismCheckRequested(
+        uint256 indexed requestId,
+        uint256 indexed msId,
+        string cid
+    );
+
+    /// @notice Emitted when the oracle fulfills a plagiarism check.
+    event PlagiarismCheckFulfilled(
+        uint256 indexed requestId,
+        uint256 indexed msId,
+        uint256 score
+    );
+
+    /// @notice Emitted when reviewers are randomly selected for a manuscript.
+    event RandomReviewersSelected(
         uint256 indexed msId,
         address[] reviewers
     );
+
     event ReviewerAdded(address indexed reviewer);
     event ReviewerRemoved(address indexed reviewer);
 
     // ──────────────────────────────── Constructor ──────────────────────────────────
 
-    /**
-     * @param vrfCoordinator    Chainlink VRF v2.5 Coordinator address.
-     * @param keyHash           Gas-lane key hash for VRF.
-     * @param vrfSubId          VRF subscription ID.
-     * @param functionsRouter   Chainlink Functions Router address.
-     * @param functionsSubId    Functions subscription ID.
-     * @param donId             DON ID (bytes32).
-     */
-    constructor(
-        address vrfCoordinator,
-        bytes32 keyHash,
-        uint256 vrfSubId,
-        address functionsRouter,
-        uint64 functionsSubId,
-        bytes32 donId
-    )
-        VRFConsumerBaseV2Plus(vrfCoordinator)
-        FunctionsClient(functionsRouter)
-    {
-        i_keyHash = keyHash;
-        i_vrfSubId = vrfSubId;
-        i_functionsSubId = functionsSubId;
-        i_donId = donId;
-
+    constructor() {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(ORACLE_ROLE, msg.sender);
     }
 
     // ──────────────────────────── Admin Functions ──────────────────────────────────
@@ -212,10 +164,13 @@ contract ReviewOracle is VRFConsumerBaseV2Plus, FunctionsClient, AccessControl {
         revert ReviewerNotFound(reviewer);
     }
 
-    // ──────────────────────── Plagiarism Check (Functions) ─────────────────────────
+    // ──────────────────────── Plagiarism Check ─────────────────────────────────────
 
     /**
-     * @notice Request a plagiarism check for a manuscript via Chainlink Functions.
+     * @notice Request a plagiarism check for a manuscript.
+     * @dev Called by PublicationRegistry (REGISTRY_ROLE). Emits an event
+     *      that the off-chain oracle operator listens for. The operator
+     *      then calls `fulfillPlagiarismCheck()` with the result.
      * @param msId The manuscript ID.
      * @param cid  The IPFS CID of the manuscript content.
      */
@@ -223,36 +178,31 @@ contract ReviewOracle is VRFConsumerBaseV2Plus, FunctionsClient, AccessControl {
         uint256 msId,
         string calldata cid
     ) external onlyRole(REGISTRY_ROLE) {
-        FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavaScript(PLAGIARISM_JS_SOURCE);
+        uint256 requestId = nextRequestId++;
+        requestToMs[requestId] = msId;
 
-        string[] memory args = new string[](1);
-        args[0] = cid;
-        req.setArgs(args);
-
-        bytes32 requestId = _sendRequest(
-            req.encodeCBOR(),
-            i_functionsSubId,
-            FUNCTIONS_CALLBACK_GAS_LIMIT,
-            i_donId
-        );
-
-        funcRequestToMs[requestId] = msId;
-        emit PlagiarismCheckRequested(msId, requestId);
+        emit PlagiarismCheckRequested(requestId, msId, cid);
     }
 
     /**
-     * @dev Chainlink Functions callback — receives the plagiarism score.
+     * @notice Fulfill a plagiarism check request with the similarity score.
+     * @dev Called by the off-chain oracle operator (ORACLE_ROLE).
+     * @param requestId The request ID from the PlagiarismCheckRequested event.
+     * @param score     The plagiarism similarity score (0-100).
      */
-    function fulfillRequest(
-        bytes32 requestId,
-        bytes memory response,
-        bytes memory /* err */
-    ) internal override {
-        uint256 msId = funcRequestToMs[requestId];
-        uint256 score = abi.decode(response, (uint256));
+    function fulfillPlagiarismCheck(
+        uint256 requestId,
+        uint256 score
+    ) external onlyRole(ORACLE_ROLE) {
+        if (requestId >= nextRequestId) revert RequestNotFound(requestId);
+        if (requestFulfilled[requestId])
+            revert RequestAlreadyFulfilled(requestId);
+        if (score > 100) revert InvalidScore(score);
 
-        emit PlagiarismCheckFulfilled(msId, score);
+        requestFulfilled[requestId] = true;
+        uint256 msId = requestToMs[requestId];
+
+        emit PlagiarismCheckFulfilled(requestId, msId, score);
 
         IPublicationRegistryCallback(publicationRegistry).fulfillPlagiarism(
             msId,
@@ -260,10 +210,14 @@ contract ReviewOracle is VRFConsumerBaseV2Plus, FunctionsClient, AccessControl {
         );
     }
 
-    // ──────────────────── Random Reviewer Selection (VRF) ─────────────────────────
+    // ──────────────────── Random Reviewer Selection ───────────────────────────────
 
     /**
-     * @notice Request random words to select reviewers for a manuscript.
+     * @notice Select random reviewers for a manuscript using on-chain randomness.
+     * @dev Called by PublicationRegistry (REGISTRY_ROLE). Uses block.prevrandao
+     *      and block.timestamp as entropy sources with Fisher-Yates selection.
+     *      This is sufficient for academic publication where miner manipulation
+     *      incentive is negligible.
      * @param msId The manuscript ID.
      */
     function requestRandomReviewers(
@@ -272,61 +226,40 @@ contract ReviewOracle is VRFConsumerBaseV2Plus, FunctionsClient, AccessControl {
         if (reviewerPool.length < NUM_REVIEWERS)
             revert ReviewerPoolTooSmall(NUM_REVIEWERS, reviewerPool.length);
 
-        uint256 requestId = s_vrfCoordinator.requestRandomWords(
-            VRFV2PlusClient.RandomWordsRequest({
-                keyHash: i_keyHash,
-                subId: i_vrfSubId,
-                requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
-                callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-                numWords: VRF_NUM_WORDS,
-                extraArgs: VRFV2PlusClient._argsToBytes(
-                    VRFV2PlusClient.ExtraArgsV1({nativePayment: false})
+        address[] memory selected = new address[](NUM_REVIEWERS);
+
+        // Generate seed from on-chain entropy
+        uint256 seed = uint256(
+            keccak256(
+                abi.encodePacked(
+                    block.prevrandao,
+                    block.timestamp,
+                    msId,
+                    reviewerPool.length
                 )
-            })
+            )
         );
 
-        vrfRequestToMs[requestId] = msId;
-        emit RandomReviewersRequested(msId, requestId);
-    }
-
-    /**
-     * @dev Chainlink VRF v2.5 callback — derives 3 unique reviewer indices
-     *      from a single random word using successive hashing.
-     */
-    function fulfillRandomWords(
-        uint256 requestId,
-        uint256[] calldata randomWords
-    ) internal override {
-        uint256 msId = vrfRequestToMs[requestId];
+        // Fisher-Yates-style selection
         uint256 poolSize = reviewerPool.length;
-        address[] memory selected = new address[](NUM_REVIEWERS);
-        uint256 selectedCount = 0;
-
-        // Use the single random word to derive multiple unique indices
-        uint256 seed = randomWords[0];
-
-        // Fisher-Yates-style selection using hashed seeds
-        // We create a temporary copy of valid indices
         uint256[] memory indices = new uint256[](poolSize);
         for (uint256 i = 0; i < poolSize; i++) {
             indices[i] = i;
         }
 
         uint256 remaining = poolSize;
-        for (uint256 i = 0; i < NUM_REVIEWERS && remaining > 0; i++) {
-            // Derive a new pseudo-random value for each selection
+        for (uint256 i = 0; i < NUM_REVIEWERS; i++) {
             uint256 rand = uint256(keccak256(abi.encode(seed, i)));
             uint256 idx = rand % remaining;
 
-            selected[selectedCount] = reviewerPool[indices[idx]];
-            selectedCount++;
+            selected[i] = reviewerPool[indices[idx]];
 
             // Swap selected index with the last valid index
             indices[idx] = indices[remaining - 1];
             remaining--;
         }
 
-        emit RandomReviewersFulfilled(msId, selected);
+        emit RandomReviewersSelected(msId, selected);
 
         IPublicationRegistryCallback(publicationRegistry)
             .fulfillRandomReviewers(msId, selected);
@@ -342,15 +275,5 @@ contract ReviewOracle is VRFConsumerBaseV2Plus, FunctionsClient, AccessControl {
     /// @notice Returns the full reviewer pool.
     function getReviewerPool() external view returns (address[] memory) {
         return reviewerPool;
-    }
-
-    // ──────────────────────────── Interface Support ────────────────────────────────
-
-    function supportsInterface(
-        bytes4 interfaceId
-    ) public pure override(AccessControl) returns (bool) {
-        return
-            interfaceId == type(AccessControl).interfaceId ||
-            interfaceId == 0x01ffc9a7; // ERC165
     }
 }
