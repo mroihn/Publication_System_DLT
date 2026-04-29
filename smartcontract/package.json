@@ -1,0 +1,23 @@
+{
+  "name": "publication-system-smartcontract",
+  "version": "1.0.0",
+  "description": "Decentralized Publication System Smart Contracts for Polygon Amoy",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:local": "hardhat run scripts/deploy.js",
+    "deploy:amoy": "hardhat run scripts/deploy.js --network amoy",
+    "upgrade:amoy": "hardhat run scripts/upgrade.js --network amoy"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/hardhat-upgrades": "^3.6.0",
+    "hardhat": "^2.22.0"
+  },
+  "dependencies": {
+    "@chainlink/contracts": "^1.3.0",
+    "@openzeppelin/contracts": "^5.1.0",
+    "@openzeppelin/contracts-upgradeable": "^5.1.0",
+    "dotenv": "^16.4.0"
+  }
+}
