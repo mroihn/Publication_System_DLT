@@ -27,9 +27,9 @@ for (const key of REQUIRED_ENV) {
   }
 }
 
-const RPC_WSS = process.env.AMOY_RPC_WSS;
+const RPC_WSS = process.env.SEPOLIA_RPC_WSS;
 const RPC_HTTP =
-  process.env.AMOY_RPC_URL || "https://rpc-amoy.polygon.technology/";
+  process.env.SEPOLIA_RPC_URL || "https://rpc.ankr.com/eth_sepolia";
 const ORACLE_KEY = process.env.ORACLE_PRIVATE_KEY;
 const ORACLE_ADDR = process.env.REVIEW_ORACLE_ADDRESS;
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL_MS || "5000", 10);
@@ -129,7 +129,7 @@ async function main() {
 
   const balance = await provider.getBalance(wallet.address);
   console.log(
-    `[Oracle]  Balance:          ${ethers.formatEther(balance)} POL\n`
+    `[Oracle]  Balance:          ${ethers.formatEther(balance)} ETH\n`
   );
 
   if (balance === 0n) {

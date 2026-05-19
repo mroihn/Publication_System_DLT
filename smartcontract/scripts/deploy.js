@@ -1,25 +1,24 @@
 const { ethers, upgrades } = require("hardhat");
 
-/**
- * Deployment script for the Decentralized Publication System.
- *
- * Deployment order (dependency-aware):
- *   1. JournalToken  (ERC-20)
- *   2. DOIToken      (ERC-721)
- *   3. ReviewOracle  (Custom Oracle)
- *   4. PublicationRegistry (UUPS Proxy)
- *   5. Post-deployment configuration (roles, permissions)
- *
- * Required environment variables:
- *   PRIVATE_KEY
- */
+//  * Deployment script for the Decentralized Publication System.
+//  *
+//  * Deployment order (dependency-aware):
+//  *   1. JournalToken  (ERC-20)
+//  *   2. DOIToken      (ERC-721)
+//  *   3. ReviewOracle  (Custom Oracle)
+//  *   4. PublicationRegistry (UUPS Proxy)
+//  *   5. Post-deployment configuration (roles, permissions)
+//  *
+//  * Required environment variables:
+//  *   PRIVATE_KEY
+//  */
 async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deploying contracts with account:", deployer.address);
   console.log(
     "Account balance:",
     ethers.formatEther(await ethers.provider.getBalance(deployer.address)),
-    "POL"
+    "ETH"
   );
 
   // JournalToken initial supply (in whole tokens)
