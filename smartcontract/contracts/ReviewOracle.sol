@@ -20,18 +20,18 @@ interface IPublicationRegistryCallback {
  * @title ReviewOracle
  * @notice Custom oracle contract for the decentralized publication system.
  *
- *  • Plagiarism checking — an off-chain ORACLE_ROLE operator submits scores.
- *  • Reviewer selection  — uses on-chain pseudo-randomness (block-based)
- *                          to select reviewers from a registered pool.
+ *  • Plagiarism checking  — an off-chain ORACLE_ROLE operator submits scores.
+ *  • Reviewer selection   — emits an event consumed by the off-chain oracle
+ *                           operator, which maintains the reviewer registry
+ *                           (with competency tiers) and calls back with the
+ *                           selected addresses. This avoids any on-chain
+ *                           randomness manipulation risk and keeps reviewer
+ *                           metadata (competency tiers) off-chain.
  *
  * @dev Only the PublicationRegistry contract (set via `setPublicationRegistry`)
  *      is allowed to initiate oracle requests. An authorized ORACLE_ROLE
- *      address (the off-chain oracle operator) fulfills plagiarism checks.
- *
- *      Reviewer selection uses keccak256(abi.encodePacked(block.prevrandao,
- *      block.timestamp, msId)) as the randomness seed. This is suitable for
- *      a testnet / academic publication system where the economic incentive
- *      to manipulate block randomness is negligible.
+ *      address (the off-chain oracle operator) fulfills both plagiarism checks
+ *      and reviewer selections.
  */
 contract ReviewOracle is AccessControl {
     // ──────────────────────────────── Constants ────────────────────────────────────
@@ -39,43 +39,47 @@ contract ReviewOracle is AccessControl {
     /// @notice Role for the PublicationRegistry contract.
     bytes32 public constant REGISTRY_ROLE = keccak256("REGISTRY_ROLE");
 
-    /// @notice Role for the off-chain oracle operator that submits plagiarism scores.
+    /// @notice Role for the off-chain oracle operator (fulfills requests).
     bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
-
-    /// @notice Number of reviewers to select per manuscript.
-    uint256 public constant NUM_REVIEWERS = 3;
 
     // ──────────────────────────────── State ────────────────────────────────────────
 
     /// @notice Address of the PublicationRegistry contract.
     address public publicationRegistry;
 
-    /// @notice Pool of registered reviewer addresses.
-    address[] public reviewerPool;
-
     /// @notice Auto-incrementing request ID counter for plagiarism checks.
-    uint256 public nextRequestId;
+    uint256 public nextPlagiarismRequestId;
 
-    /// @notice Request ID → manuscript ID (for plagiarism check tracking).
-    mapping(uint256 => uint256) public requestToMs;
+    /// @notice Auto-incrementing request ID counter for reviewer selections.
+    uint256 public nextReviewerRequestId;
 
-    /// @notice Request ID → whether the request has been fulfilled.
-    mapping(uint256 => bool) public requestFulfilled;
+    /// @notice Plagiarism request ID → manuscript ID.
+    mapping(uint256 => uint256) public plagiarismRequestToMs;
+
+    /// @notice Plagiarism request ID → whether the request has been fulfilled.
+    mapping(uint256 => bool) public plagiarismRequestFulfilled;
+
+    /// @notice Reviewer selection request ID → manuscript ID.
+    mapping(uint256 => uint256) public reviewerRequestToMs;
+
+    /// @notice Reviewer selection request ID → whether the request has been fulfilled.
+    mapping(uint256 => bool) public reviewerRequestFulfilled;
 
     // ──────────────────────────────── Custom Errors ────────────────────────────────
 
     error RegistryNotSet();
-    error ReviewerPoolTooSmall(uint256 required, uint256 actual);
-    error ReviewerAlreadyRegistered(address reviewer);
-    error ReviewerNotFound(address reviewer);
     error OracleZeroAddress();
     error RequestAlreadyFulfilled(uint256 requestId);
     error RequestNotFound(uint256 requestId);
     error InvalidScore(uint256 score);
+    error InvalidReviewerCount(uint256 count);
 
     // ──────────────────────────────── Events ───────────────────────────────────────
 
-    /// @notice Emitted when a plagiarism check is requested (consumed by off-chain oracle).
+    /**
+     * @notice Emitted when a plagiarism check is requested.
+     *         Consumed by the off-chain oracle operator.
+     */
     event PlagiarismCheckRequested(
         uint256 indexed requestId,
         uint256 indexed msId,
@@ -89,14 +93,23 @@ contract ReviewOracle is AccessControl {
         uint256 score
     );
 
-    /// @notice Emitted when reviewers are randomly selected for a manuscript.
-    event RandomReviewersSelected(
+    /**
+     * @notice Emitted when reviewer selection is requested.
+     *         The off-chain oracle operator listens for this event,
+     *         selects reviewers from its competency-tiered registry,
+     *         then calls `fulfillReviewerSelection`.
+     */
+    event ReviewerSelectionRequested(
+        uint256 indexed requestId,
+        uint256 indexed msId
+    );
+
+    /// @notice Emitted when the oracle fulfills a reviewer selection.
+    event ReviewerSelectionFulfilled(
+        uint256 indexed requestId,
         uint256 indexed msId,
         address[] reviewers
     );
-
-    event ReviewerAdded(address indexed reviewer);
-    event ReviewerRemoved(address indexed reviewer);
 
     // ──────────────────────────────── Constructor ──────────────────────────────────
 
@@ -125,45 +138,6 @@ contract ReviewOracle is AccessControl {
         _grantRole(REGISTRY_ROLE, registry);
     }
 
-    /**
-     * @notice Add a reviewer address to the eligible reviewer pool.
-     * @param reviewer The address to add.
-     */
-    function addReviewer(
-        address reviewer
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (reviewer == address(0)) revert OracleZeroAddress();
-
-        // Check for duplicates
-        for (uint256 i = 0; i < reviewerPool.length; i++) {
-            if (reviewerPool[i] == reviewer)
-                revert ReviewerAlreadyRegistered(reviewer);
-        }
-
-        reviewerPool.push(reviewer);
-        emit ReviewerAdded(reviewer);
-    }
-
-    /**
-     * @notice Remove a reviewer address from the pool.
-     * @param reviewer The address to remove.
-     */
-    function removeReviewer(
-        address reviewer
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        uint256 length = reviewerPool.length;
-        for (uint256 i = 0; i < length; i++) {
-            if (reviewerPool[i] == reviewer) {
-                // Swap with last element and pop
-                reviewerPool[i] = reviewerPool[length - 1];
-                reviewerPool.pop();
-                emit ReviewerRemoved(reviewer);
-                return;
-            }
-        }
-        revert ReviewerNotFound(reviewer);
-    }
-
     // ──────────────────────── Plagiarism Check ─────────────────────────────────────
 
     /**
@@ -178,8 +152,8 @@ contract ReviewOracle is AccessControl {
         uint256 msId,
         string calldata cid
     ) external onlyRole(REGISTRY_ROLE) {
-        uint256 requestId = nextRequestId++;
-        requestToMs[requestId] = msId;
+        uint256 requestId = nextPlagiarismRequestId++;
+        plagiarismRequestToMs[requestId] = msId;
 
         emit PlagiarismCheckRequested(requestId, msId, cid);
     }
@@ -194,13 +168,13 @@ contract ReviewOracle is AccessControl {
         uint256 requestId,
         uint256 score
     ) external onlyRole(ORACLE_ROLE) {
-        if (requestId >= nextRequestId) revert RequestNotFound(requestId);
-        if (requestFulfilled[requestId])
+        if (requestId >= nextPlagiarismRequestId) revert RequestNotFound(requestId);
+        if (plagiarismRequestFulfilled[requestId])
             revert RequestAlreadyFulfilled(requestId);
         if (score > 100) revert InvalidScore(score);
 
-        requestFulfilled[requestId] = true;
-        uint256 msId = requestToMs[requestId];
+        plagiarismRequestFulfilled[requestId] = true;
+        uint256 msId = plagiarismRequestToMs[requestId];
 
         emit PlagiarismCheckFulfilled(requestId, msId, score);
 
@@ -210,70 +184,58 @@ contract ReviewOracle is AccessControl {
         );
     }
 
-    // ──────────────────── Random Reviewer Selection ───────────────────────────────
+    // ──────────────────── Reviewer Selection ──────────────────────────────────────
 
     /**
-     * @notice Select random reviewers for a manuscript using on-chain randomness.
-     * @dev Called by PublicationRegistry (REGISTRY_ROLE). Uses block.prevrandao
-     *      and block.timestamp as entropy sources with Fisher-Yates selection.
-     *      This is sufficient for academic publication where miner manipulation
-     *      incentive is negligible.
+     * @notice Request reviewer selection for a manuscript.
+     * @dev Called by PublicationRegistry (REGISTRY_ROLE). Emits an event
+     *      consumed by the off-chain oracle operator, which maintains the
+     *      competency-tiered reviewer registry and selects an odd number
+     *      of qualified reviewers. The operator then calls
+     *      `fulfillReviewerSelection()` with the chosen addresses.
      * @param msId The manuscript ID.
      */
     function requestRandomReviewers(
         uint256 msId
     ) external onlyRole(REGISTRY_ROLE) {
-        if (reviewerPool.length < NUM_REVIEWERS)
-            revert ReviewerPoolTooSmall(NUM_REVIEWERS, reviewerPool.length);
+        uint256 requestId = nextReviewerRequestId++;
+        reviewerRequestToMs[requestId] = msId;
 
-        address[] memory selected = new address[](NUM_REVIEWERS);
+        emit ReviewerSelectionRequested(requestId, msId);
+    }
 
-        // Generate seed from on-chain entropy
-        uint256 seed = uint256(
-            keccak256(
-                abi.encodePacked(
-                    block.prevrandao,
-                    block.timestamp,
-                    msId,
-                    reviewerPool.length
-                )
-            )
-        );
+    /**
+     * @notice Fulfill a reviewer selection request with chosen reviewer addresses.
+     * @dev Called by the off-chain oracle operator (ORACLE_ROLE).
+     *      The reviewer count MUST be an odd number ≥ 3 to guarantee a majority
+     *      verdict is always reachable.
+     * @param requestId The request ID from the ReviewerSelectionRequested event.
+     * @param reviewers Array of selected reviewer addresses (must be odd length ≥ 3).
+     */
+    function fulfillReviewerSelection(
+        uint256 requestId,
+        address[] calldata reviewers
+    ) external onlyRole(ORACLE_ROLE) {
+        if (requestId >= nextReviewerRequestId) revert RequestNotFound(requestId);
+        if (reviewerRequestFulfilled[requestId])
+            revert RequestAlreadyFulfilled(requestId);
+        // Enforce odd count ≥ 3 so majority verdict is always achievable
+        if (reviewers.length < 3 || reviewers.length % 2 == 0)
+            revert InvalidReviewerCount(reviewers.length);
 
-        // Fisher-Yates-style selection
-        uint256 poolSize = reviewerPool.length;
-        uint256[] memory indices = new uint256[](poolSize);
-        for (uint256 i = 0; i < poolSize; i++) {
-            indices[i] = i;
-        }
+        reviewerRequestFulfilled[requestId] = true;
+        uint256 msId = reviewerRequestToMs[requestId];
 
-        uint256 remaining = poolSize;
-        for (uint256 i = 0; i < NUM_REVIEWERS; i++) {
-            uint256 rand = uint256(keccak256(abi.encode(seed, i)));
-            uint256 idx = rand % remaining;
-
-            selected[i] = reviewerPool[indices[idx]];
-
-            // Swap selected index with the last valid index
-            indices[idx] = indices[remaining - 1];
-            remaining--;
-        }
-
-        emit RandomReviewersSelected(msId, selected);
+        emit ReviewerSelectionFulfilled(requestId, msId, reviewers);
 
         IPublicationRegistryCallback(publicationRegistry)
-            .fulfillRandomReviewers(msId, selected);
+            .fulfillRandomReviewers(msId, reviewers);
     }
 
     // ──────────────────────────────── View ─────────────────────────────────────────
 
-    /// @notice Returns the current number of reviewers in the pool.
-    function getReviewerPoolSize() external view returns (uint256) {
-        return reviewerPool.length;
-    }
-
-    /// @notice Returns the full reviewer pool.
-    function getReviewerPool() external view returns (address[] memory) {
-        return reviewerPool;
+    /// @notice Returns the address of the configured publication registry.
+    function getPublicationRegistry() external view returns (address) {
+        return publicationRegistry;
     }
 }
