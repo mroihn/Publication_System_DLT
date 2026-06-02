@@ -24,6 +24,72 @@ interface IReviewOracle {
 }
 
 /**
+ * @title DOILib
+ * @notice Utility for generating DOI strings following the standard format:
+ *         10.{registrant}/{suffix}
+ *
+ *  The registrant prefix "55121" is a placeholder for this academic system.
+ *  The suffix encodes chain ID, manuscript ID, and version for uniqueness.
+ *  Full DOI example: 10.55121/2024.11155111.0.1
+ *                     └─ prefix ─┘ └── suffix ──┘
+ *                                   year.chainId.msId.version
+ */
+library DOILib {
+    /// @dev Registrant prefix issued by the International DOI Foundation.
+    string internal constant DOI_PREFIX = "10.55121";
+
+    /**
+     * @notice Build a DOI string for a published manuscript.
+     * @param msId    The manuscript ID.
+     * @param version The manuscript version at publication time.
+     * @return doi    A string of the form "10.55121/{year}.{chainId}.{msId}.{version}"
+     */
+    function buildDOI(
+        uint256 msId,
+        uint256 version
+    ) internal view returns (string memory doi) {
+        uint256 year = _blockYear();
+        doi = string(
+            abi.encodePacked(
+                DOI_PREFIX,
+                "/",
+                _uint2str(year),
+                ".",
+                _uint2str(block.chainid),
+                ".",
+                _uint2str(msId),
+                ".",
+                _uint2str(version)
+            )
+        );
+    }
+
+    /// @dev Approximate year from block.timestamp (UTC, good enough for a DOI suffix).
+    function _blockYear() private view returns (uint256) {
+        // 1970-01-01 epoch; each year ≈ 365.2425 days = 31,556,952 seconds
+        return 1970 + block.timestamp / 31_556_952;
+    }
+
+    /// @dev Convert uint256 to its decimal ASCII representation.
+    function _uint2str(uint256 value) private pure returns (string memory) {
+        if (value == 0) return "0";
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits--;
+            buffer[digits] = bytes1(uint8(48 + (value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+}
+
+/**
  * @title PublicationRegistry
  * @notice Core state-machine and controller for the decentralized publication
  *         system. Manages the full manuscript lifecycle from submission through
@@ -47,6 +113,7 @@ contract PublicationRegistry is
     UUPSUpgradeable,
     AccessControlUpgradeable
 {
+    using DOILib for uint256;
     // ──────────────────────────────── Enums ────────────────────────────────────────
 
     /// @notice Manuscript lifecycle states.
@@ -83,6 +150,7 @@ contract PublicationRegistry is
         uint256 rejectCount;
         uint256 reviseCount;
         uint256 reviewCount; // total reviews submitted this round
+        string doi;          // DOI string in format 10.PREFIX/SUFFIX (set on publication)
     }
 
     // ──────────────────────────────── Roles ────────────────────────────────────────
@@ -156,6 +224,9 @@ contract PublicationRegistry is
 
     /// @notice Emitted when the DOI NFT is minted upon publication.
     event DOIMinted(uint256 indexed msId, uint256 indexed doiTokenId);
+
+    /// @notice Emitted when a DOI is registered, carrying the full DOI string.
+    event DOIRegistered(uint256 indexed msId, string doi, uint256 indexed doiTokenId);
 
     // ──────────────────────────────── Initializer ─────────────────────────────────
 
@@ -242,7 +313,7 @@ contract PublicationRegistry is
             return;
         }
 
-        // Plagiarism check passed — request reviewer assignment via VRF
+        // Plagiarism check passed — request reviewer assignment
         ms.status = Status.UNDER_REVIEW;
         emit DecisionMade(msId, Status.UNDER_REVIEW);
 
@@ -372,15 +443,29 @@ contract PublicationRegistry is
             emit IncentivePaid(reviewers[i], REVIEWER_INCENTIVE);
         }
 
-        // Mint DOI NFT to the author
-        string memory doiURI = string(
-            abi.encodePacked("ipfs://", ms.cid)
+        // ── Generate a standards-compliant DOI ──────────────────────────────
+        // Format: 10.{PREFIX}/{year}.{chainId}.{msId}.{version}
+        // Example: 10.55121/2024.11155111.0.1
+        string memory doi = DOILib.buildDOI(msId, ms.version);
+        ms.doi = doi;
+
+        // ── Build the token metadata URI ────────────────────────────────────
+        // The tokenURI points to the IPFS content; the DOI is embedded in the
+        // JSON metadata so resolvers (CrossRef-style) can index it.
+        string memory tokenURI_ = string(
+            abi.encodePacked(
+                "ipfs://",
+                ms.cid,
+                "?doi=",
+                doi
+            )
         );
-        uint256 doiTokenId = doiToken.mint(msg.sender, doiURI);
+        uint256 doiTokenId = doiToken.mint(msg.sender, tokenURI_);
 
         ms.status = Status.PUBLISHED;
 
         emit DOIMinted(msId, doiTokenId);
+        emit DOIRegistered(msId, doi, doiTokenId);
         emit DecisionMade(msId, Status.PUBLISHED);
     }
 

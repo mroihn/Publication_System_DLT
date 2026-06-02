@@ -1,0 +1,14 @@
+{
+  "name": "publication-oracle",
+  "version": "1.0.0",
+  "description": "Off-chain oracle operator for the Decentralized Publication System",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "ethers": "^6.13.0"
+  }
+}
