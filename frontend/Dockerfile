@@ -1,35 +1,25 @@
-# Stage 1: Build dependencies and compile Next.js
-FROM node:18-alpine AS builder
+# Stage 1: Build
+FROM node:20-alpine AS builder
 WORKDIR /app
-
-# Copy package.json and install dependencies
-COPY package.json package-lock.json* ./
+COPY package*.json ./
 RUN npm ci
-
-# Copy the rest of the application
 COPY . .
-
-# Build the Next.js application
+# Ensure next.config.js has output: 'standalone'
 RUN npm run build
 
-# Stage 2: Production runner
-FROM node:18-alpine AS runner
+# Stage 2: Runner
+FROM node:20-alpine AS runner
 WORKDIR /app
+ENV NODE_ENV=production
 
-ENV NODE_ENV production
-
-# Create a non-root user for security
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Copy built assets from builder
+# Copy standalone output and static assets
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 
-USER nextjs
+# Security: Run as non-root user
+USER node
 
 EXPOSE 3000
-ENV PORT 3000
-
+ENV PORT=3000
 CMD ["node", "server.js"]

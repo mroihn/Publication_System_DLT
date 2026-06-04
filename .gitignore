@@ -1,0 +1,13 @@
+# Local Environment
+.env
+.env.local
+.env.*.local
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker Data
+.docker-volumes/

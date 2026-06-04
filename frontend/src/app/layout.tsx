@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-import { Web3Provider } from "@/context/Web3Context";
+import { AuthProvider } from "@/core/context/AuthContext";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 
@@ -32,13 +32,13 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-slate-950 text-slate-100">
-        <Web3Provider>
+        <AuthProvider>
           <Navbar />
           <main className="flex-grow flex flex-col pt-16">
             {children}
           </main>
           <Footer />
-        </Web3Provider>
+        </AuthProvider>
       </body>
     </html>
   );

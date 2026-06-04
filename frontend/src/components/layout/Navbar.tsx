@@ -1,8 +1,18 @@
+"use client";
+
 import Link from "next/link";
-import ConnectWallet from "../shared/ConnectWallet";
-import { BookOpenText } from "lucide-react";
+import { BookOpenText, LogOut } from "lucide-react";
+import { useAuth } from "@/core/context/AuthContext";
+import { useRouter } from "next/navigation";
 
 export default function Navbar() {
+  const { isAuthenticated, logout } = useAuth();
+  const router = useRouter();
+
+  const handleLogout = () => {
+    logout();
+    router.push('/login');
+  };
   return (
     <nav className="fixed top-0 w-full z-50 bg-slate-950/80 backdrop-blur-md border-b border-slate-800">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -20,7 +30,14 @@ export default function Navbar() {
           </div>
           
           <div className="flex items-center space-x-4">
-            <ConnectWallet />
+            {isAuthenticated ? (
+              <button onClick={handleLogout} className="flex items-center space-x-2 text-slate-300 hover:text-white transition-colors text-sm font-medium">
+                <LogOut className="w-4 h-4" />
+                <span>Logout</span>
+              </button>
+            ) : (
+              <Link href="/login" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Login</Link>
+            )}
           </div>
         </div>
       </div>

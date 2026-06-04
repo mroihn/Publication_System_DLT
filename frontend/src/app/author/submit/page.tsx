@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { UploadCloud, FileText, Send } from "lucide-react";
-import { useAccount } from "wagmi";
+import { useAuth } from "@/core/context/AuthContext";
 import { useRouter } from "next/navigation";
 
 export default function SubmitManuscriptPage() {
-  const { isConnected } = useAccount();
+  const { isAuthenticated: isConnected } = useAuth();
   const router = useRouter();
   
   const [title, setTitle] = useState("");
