@@ -10,7 +10,7 @@
     "upgrade:amoy": "hardhat run scripts/upgrade.js --network amoy"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-toolbox": "^6.1.2",
     "@openzeppelin/hardhat-upgrades": "^3.6.0",
     "hardhat": "^2.22.0"
   },
