@@ -39,7 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = (token: string, userData: any) => {
     localStorage.setItem('token', token);
-    // apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     setIsAuthenticated(true);
     setUser(userData);
   };

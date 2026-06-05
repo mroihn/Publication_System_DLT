@@ -1,6 +1,6 @@
 "use client";
 import { useState } from 'react';
-// import { apiClient } from '@/core/services/api.client';
+import { apiClient } from '@/core/services/api.client';
 import { useRouter } from 'next/navigation';
 
 export default function RegisterForm() {
@@ -15,7 +15,7 @@ export default function RegisterForm() {
       return setError('Passwords do not match');
     }
     try {
-      // await apiClient.post('/auth/register', { email: form.email, password: form.password });
+      await apiClient.post('/auth/register', { email: form.email, password: form.password });
       alert('Registration successful! Please login.');
       router.push('/login');
     } catch (err: any) {

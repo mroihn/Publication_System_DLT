@@ -3,7 +3,7 @@
 import { useAuth } from '@/core/context/AuthContext';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-// import { apiClient } from '@/core/services/api.client';
+import { apiClient } from '@/core/services/api.client';
 
 export default function ProfilePage() {
   const { user, isAuthenticated } = useAuth();
@@ -38,10 +38,10 @@ export default function ProfilePage() {
       }
 
       // 3. Dispatch to authorized backend route via JWT
-      // await apiClient.patch('/users/wallet-bind', { walletAddress });
+      await apiClient.patch('/users/wallet-bind', { walletAddress });
       
       alert(`MetaMask Wallet ${walletAddress} successfully bound to your account!`);
-      // window.location.reload(); // Refresh session state
+      window.location.reload(); // Refresh session state
     } catch (err: any) {
       console.error(err);
       if (err.code === 4001) {

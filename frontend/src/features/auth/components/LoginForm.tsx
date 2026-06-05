@@ -1,7 +1,8 @@
 "use client";
 import { useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/core/context/AuthContext';
-// import { apiClient } from '@/core/services/api.client';
+import { apiClient } from '@/core/services/api.client';
 import { useRouter } from 'next/navigation';
 
 export default function LoginForm() {
@@ -15,10 +16,8 @@ export default function LoginForm() {
     e.preventDefault();
     setError(null);
     try {
-      // Mock API call for now
-      // const { data } = await apiClient.post('/auth/login', { email, password });
-      // login(data.accessToken, data.user);
-      login('mock-token', { email, id: '123' });
+      const { data } = await apiClient.post('/auth/login', { email, password });
+      login(data.accessToken, data.user);
       router.push('/profile');
     } catch (err: any) {
       setError(err.response?.data?.message || 'Invalid credentials');
@@ -46,6 +45,11 @@ export default function LoginForm() {
         required
       />
       <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded transition-colors">Login</button>
+      <div className="text-center mt-2">
+        <Link href="/register" className="text-sm text-indigo-400 hover:text-indigo-300 transition-colors">
+          Don't have an account? Register
+        </Link>
+      </div>
     </form>
   );
 }

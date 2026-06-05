@@ -4,11 +4,13 @@
 import { Injectable, Inject, UnauthorizedException } from '@nestjs/common';
 import type { IUserRepository } from '../../core/domain/repositories/user.repository.interface';
 import * as bcrypt from 'bcrypt';
+import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class AuthenticateUserUseCase {
   constructor(
     @Inject('IUserRepository') private readonly userRepository: IUserRepository,
+    private readonly jwtService: JwtService,
   ) {}
 
   async execute(email: string, plainPassword: string): Promise<{ accessToken: string, user: any }> {
@@ -24,11 +26,12 @@ export class AuthenticateUserUseCase {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    // Mock token generation (In a real app, use @nestjs/jwt JwtService)
-    const mockToken = Buffer.from(`${user.id}:${new Date().getTime()}`).toString('base64');
+    // Generate real JWT token
+    const payload = { email: user.email, sub: user.id };
+    const accessToken = this.jwtService.sign(payload);
 
     return {
-      accessToken: mockToken,
+      accessToken,
       user: {
         id: user.id,
         email: user.email,

@@ -1,7 +1,8 @@
 // ==========================================
 // INFRASTRUCTURE LAYER: Controllers / Routing
 // ==========================================
-import { Controller, Post, Body, Get } from '@nestjs/common';
+import { Controller, Post, Body, Get, UseGuards, Request } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { RegisterUserUseCase } from '../../../use-cases/auth/register-user.use-case';
 import { AuthenticateUserUseCase } from '../../../use-cases/auth/authenticate-user.use-case';
 
@@ -39,14 +40,10 @@ export class AuthController {
     return { message: 'Logged out successfully' };
   }
 
+  @UseGuards(AuthGuard('jwt'))
   @Get('users/me')
-  getProfile() {
-    // In a real implementation, a JwtAuthGuard would extract the user ID
-    // from the Authorization header and fetch the user from the database.
-    return { 
-      id: 'mock-id-123', 
-      email: 'user@example.com', 
-      walletAddress: null 
-    };
+  getProfile(@Request() req: any) {
+    // The req.user is populated by the JwtStrategy
+    return req.user;
   }
 }
