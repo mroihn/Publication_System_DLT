@@ -4,32 +4,40 @@ import { useAuth } from '@/core/context/AuthContext';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/core/services/api.client';
+import { useToast } from '@/core/context/ToastContext';
 
 export default function ProfilePage() {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
+  const { addToast } = useToast();
   const [isLinking, setIsLinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Basic redirect if not authenticated
-    // Note: In a robust setup this might wait for an `isLoading` flag first
-    if (!isAuthenticated && !localStorage.getItem('token')) {
+    if (!isLoading && !isAuthenticated) {
       router.push('/login');
     }
-  }, [isAuthenticated, router]);
+  }, [isLoading, isAuthenticated, router]);
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-8 min-h-[50vh]">
+        <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) return null;
 
   const handleConnectAndLink = async () => {
     setError(null);
     try {
       setIsLinking(true);
 
-      // 1. Interrogate window.ethereum defensively
       if (typeof window === 'undefined' || !(window as any).ethereum) {
         throw new Error('MetaMask is not installed. Please install it to proceed.');
       }
 
-      // 2. Request account prompt securely
       const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
       const walletAddress = accounts[0];
 
@@ -37,11 +45,12 @@ export default function ProfilePage() {
         throw new Error('No account selected in MetaMask.');
       }
 
-      // 3. Dispatch to authorized backend route via JWT
       await apiClient.patch('/users/wallet-bind', { walletAddress });
       
-      alert(`MetaMask Wallet ${walletAddress} successfully bound to your account!`);
-      window.location.reload(); // Refresh session state
+      addToast(`MetaMask Wallet ${walletAddress.slice(0,6)}... successfully bound to your account!`, 'success');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
     } catch (err: any) {
       console.error(err);
       if (err.code === 4001) {
@@ -55,24 +64,30 @@ export default function ProfilePage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-8">
-      <h1 className="text-3xl font-bold mb-6">Security Profile</h1>
-      <div className="bg-white dark:bg-slate-900 p-6 rounded-xl shadow-sm border border-slate-200">
+    <div className="max-w-4xl mx-auto w-full p-6 py-12">
+      <div className="mb-8">
+        <h1 className="text-3xl font-extrabold text-gray-900 mb-2">Security Profile</h1>
+        <p className="text-gray-600 text-lg">Manage your account credentials and decentralized identity.</p>
+      </div>
+      
+      <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200">
         
-        <div className="mb-4">
-          <label className="text-sm font-medium text-slate-500">Email Address</label>
-          <p className="text-lg font-semibold">{user?.email}</p>
+        <div className="mb-6">
+          <label className="text-sm font-medium text-gray-500 uppercase tracking-wider">Email Address</label>
+          <p className="text-xl font-semibold text-gray-900 mt-1">{user?.email}</p>
         </div>
         
         <div className="mb-8">
-          <label className="text-sm font-medium text-slate-500">Bound Ethereum Wallet</label>
-          <p className="text-lg font-mono">
-            {user?.walletAddress || 'No wallet linked'}
-          </p>
+          <label className="text-sm font-medium text-gray-500 uppercase tracking-wider">Bound Ethereum Wallet</label>
+          <div className="mt-2 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+            <p className="text-lg font-mono text-gray-800 break-all">
+              {user?.walletAddress || 'No wallet linked'}
+            </p>
+          </div>
         </div>
 
         {error && (
-          <div className="mb-4 p-4 text-sm text-red-800 bg-red-100 rounded-lg">
+          <div className="mb-6 p-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg shadow-sm">
             {error}
           </div>
         )}
@@ -81,7 +96,7 @@ export default function ProfilePage() {
           <button
             onClick={handleConnectAndLink}
             disabled={isLinking}
-            className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+            className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-medium transition-colors disabled:opacity-50 shadow-sm"
           >
             {isLinking ? 'Binding MetaMask...' : 'Connect & Bind MetaMask'}
           </button>

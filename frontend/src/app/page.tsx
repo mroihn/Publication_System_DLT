@@ -1,65 +1,67 @@
-import Image from "next/image";
+import Link from "next/link";
+import { BookOpen, FileText, Users } from "lucide-react";
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="flex flex-col flex-1 bg-white">
+      {/* Hero Section */}
+      <section className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24 md:py-32 flex flex-col items-center text-center">
+        <h1 className="text-4xl md:text-6xl font-extrabold text-gray-900 tracking-tight mb-6">
+          Advancing Science Through <span className="text-indigo-600">Decentralization</span>
+        </h1>
+        <p className="text-lg md:text-xl text-gray-600 max-w-3xl mb-10 leading-relaxed">
+          A transparent, immutable, and peer-reviewed publishing platform designed for the modern academic community. Share your research with the world securely.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-4">
+          <Link
+            href="/articles"
+            className="inline-flex justify-center items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-sm"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            Explore Publications
+          </Link>
+          <Link
+            href="/author/submit"
+            className="inline-flex justify-center items-center px-6 py-3 border border-gray-300 shadow-sm text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
           >
-            Documentation
-          </a>
+            Submit Manuscript
+          </Link>
         </div>
-      </main>
+      </section>
+
+      {/* Features Section */}
+      <section className="w-full bg-gray-50 border-t border-gray-200 py-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mb-6 text-indigo-600">
+                <BookOpen className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-3">Open Access</h3>
+              <p className="text-gray-600">
+                Research should be free and accessible to everyone. Our platform ensures that all published work remains open access permanently.
+              </p>
+            </div>
+            <div className="flex flex-col items-center text-center">
+              <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mb-6 text-indigo-600">
+                <Users className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-3">Transparent Peer Review</h3>
+              <p className="text-gray-600">
+                Fostering accountability and constructive feedback through an open and verifiable peer-review process.
+              </p>
+            </div>
+            <div className="flex flex-col items-center text-center">
+              <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mb-6 text-indigo-600">
+                <FileText className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-3">Immutable Records</h3>
+              <p className="text-gray-600">
+                Powered by Web3 technology, establishing verifiable and permanent records of authorship and publication dates.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

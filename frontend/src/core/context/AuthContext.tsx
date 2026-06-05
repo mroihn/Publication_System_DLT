@@ -5,6 +5,7 @@ import { apiClient } from '../services/api.client';
 
 interface AuthContextType {
   isAuthenticated: boolean;
+  isLoading: boolean;
   user: any | null;
   login: (token: string, userData: any) => void;
   logout: () => void;
@@ -14,6 +15,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
 
   useEffect(() => {
@@ -22,6 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!token) {
         setIsAuthenticated(false);
         setUser(null);
+        setIsLoading(false);
         return;
       }
       try {
@@ -32,6 +35,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         setIsAuthenticated(false);
         setUser(null);
+      } finally {
+        setIsLoading(false);
       }
     };
     verifySession();
@@ -57,7 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, user, login, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated, isLoading, user, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

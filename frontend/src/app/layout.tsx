@@ -13,6 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 import { AuthProvider } from "@/core/context/AuthContext";
+import { ToastProvider } from "@/core/context/ToastContext";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 
@@ -29,16 +30,18 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-slate-950 text-slate-100">
-        <AuthProvider>
-          <Navbar />
+      <body className="min-h-full flex flex-col bg-gray-50 text-gray-900">
+        <ToastProvider>
+          <AuthProvider>
+            <Navbar />
           <main className="flex-grow flex flex-col pt-16">
             {children}
           </main>
           <Footer />
         </AuthProvider>
+        </ToastProvider>
       </body>
     </html>
   );
