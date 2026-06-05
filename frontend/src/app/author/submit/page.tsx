@@ -5,6 +5,7 @@ import { UploadCloud, FileText, Send } from "lucide-react";
 import { useAuth } from "@/core/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/core/context/ToastContext";
+import { apiClient } from "@/core/services/api.client";
 
 export default function SubmitManuscriptPage() {
   const { isAuthenticated: isConnected, isLoading } = useAuth();
@@ -13,6 +14,7 @@ export default function SubmitManuscriptPage() {
   
   const [title, setTitle] = useState("");
   const [abstract, setAbstract] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (isLoading) {
@@ -42,13 +44,26 @@ export default function SubmitManuscriptPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!file) return addToast("Please select a file to upload.", "error");
+
     setIsSubmitting(true);
-    // Simulate IPFS upload and Contract interaction
-    setTimeout(() => {
+    try {
+      const formData = new FormData();
+      formData.append("title", title);
+      formData.append("abstract", abstract);
+      formData.append("file", file);
+
+      await apiClient.post('/manuscripts/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      addToast("Manuscript successfully uploaded and submitted to the smart contract!", "success");
+      router.push("/tracker");
+    } catch (err) {
+      addToast("Submission failed. Please try again.", "error");
+    } finally {
       setIsSubmitting(false);
-      addToast("Manuscript submitted successfully to the smart contract!", "success");
-      router.push("/articles");
-    }, 2000);
+    }
   };
 
   return (
@@ -98,12 +113,14 @@ export default function SubmitManuscriptPage() {
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Upload PDF Document
           </label>
-          <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center bg-gray-50 hover:bg-gray-100 transition-colors cursor-pointer group">
+          <label htmlFor="file-upload" className="block border-2 border-dashed border-gray-300 rounded-xl p-8 text-center bg-gray-50 hover:bg-gray-100 transition-colors cursor-pointer group">
             <UploadCloud className="w-12 h-12 text-gray-400 mx-auto mb-4 group-hover:text-indigo-500 transition-colors" />
-            <p className="text-gray-700 font-medium">Drag & drop your PDF here</p>
-            <p className="text-gray-500 text-sm mt-1">or click to browse from your computer</p>
-            <input type="file" accept=".pdf" className="hidden" />
-          </div>
+            <p className="text-gray-700 font-medium">
+              {file ? file.name : "Drag & drop your PDF here"}
+            </p>
+            {!file && <p className="text-gray-500 text-sm mt-1">or click to browse from your computer</p>}
+            <input id="file-upload" type="file" accept=".pdf" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} required />
+          </label>
         </div>
 
         <div className="pt-6 border-t border-gray-200 flex justify-end">

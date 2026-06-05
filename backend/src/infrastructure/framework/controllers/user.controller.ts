@@ -2,7 +2,7 @@ import { Controller, Patch, Body, UseGuards, Request } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { BindMetaMaskWalletUseCase } from '../../../use-cases/user/bind-metamask-wallet.use-case';
 
-@Controller('api/v1/users')
+@Controller('users')
 export class UserController {
   constructor(private readonly bindWalletUseCase: BindMetaMaskWalletUseCase) {}
 

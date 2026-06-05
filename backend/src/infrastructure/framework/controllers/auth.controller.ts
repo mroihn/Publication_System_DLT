@@ -6,7 +6,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { RegisterUserUseCase } from '../../../use-cases/auth/register-user.use-case';
 import { AuthenticateUserUseCase } from '../../../use-cases/auth/authenticate-user.use-case';
 
-@Controller('api/v1')
+@Controller()
 export class AuthController {
   constructor(
     private readonly registerUserUseCase: RegisterUserUseCase,
