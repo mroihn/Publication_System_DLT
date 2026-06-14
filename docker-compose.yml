@@ -64,3 +64,14 @@ services:
       - backend
     networks:
       - publishing-network
+
+  oracle:
+    build:
+      context: ./oracle
+      dockerfile: Dockerfile
+    container_name: publishing_oracle
+    env_file:
+      - ./oracle/.env
+    restart: unless-stopped
+    networks:
+      - publishing-network

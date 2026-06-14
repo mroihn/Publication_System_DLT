@@ -1,16 +1,3 @@
-/**
- * Plagiarism Checker Module
- *
- * Pluggable plagiarism detection. If PLAGIARISM_API_URL is set, it calls the
- * external API. Otherwise, it falls back to a deterministic mock that hashes
- * the CID to produce a repeatable score (useful for testing).
- */
-
-/**
- * Check plagiarism for a given IPFS CID.
- * @param {string} cid  — The IPFS CID of the manuscript.
- * @returns {Promise<number>} — A similarity score from 0 to 100.
- */
 async function checkPlagiarism(cid) {
   const apiUrl = process.env.PLAGIARISM_API_URL;
 
@@ -21,10 +8,6 @@ async function checkPlagiarism(cid) {
   return mockCheck(cid);
 }
 
-/**
- * Call an external plagiarism detection API.
- * Expects the API to accept POST { cid } and return { score: number }.
- */
 async function checkWithApi(apiUrl, cid) {
   try {
     const response = await fetch(apiUrl, {
@@ -51,11 +34,6 @@ async function checkWithApi(apiUrl, cid) {
   }
 }
 
-/**
- * Deterministic mock plagiarism check.
- * Hashes the CID to produce a repeatable score between 0 and 100.
- * This ensures the same CID always produces the same score for testing.
- */
 function mockCheck(cid) {
   let hash = 0;
   for (let i = 0; i < cid.length; i++) {

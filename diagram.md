@@ -40,7 +40,7 @@ sequenceDiagram
             Note over PR: Re-enters CHECKING state
         else Majority REJECT
             PR-->>PR: Status → REJECTED
-        endz
+        end
     else score > threshold
         PR-->>PR: Status → REJECTED
     end
