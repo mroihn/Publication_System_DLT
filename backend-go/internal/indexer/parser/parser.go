@@ -80,8 +80,14 @@ func (p *MultiContractParser) Parse(log types.Log) (*ParsedEvent, error) {
 		if err := c.parsedABI.UnpackIntoMap(args, ev.Name, log.Data); err != nil {
 			return nil, fmt.Errorf("unpack %s.%s: %w", c.key, ev.Name, err)
 		}
-		// Decode indexed arguments
-		if err := abi.ParseTopicsIntoMap(args, ev.Inputs, log.Topics[1:]); err != nil {
+		// Decode indexed arguments — ParseTopicsIntoMap expects only indexed fields.
+		var indexedArgs abi.Arguments
+		for _, arg := range ev.Inputs {
+			if arg.Indexed {
+				indexedArgs = append(indexedArgs, arg)
+			}
+		}
+		if err := abi.ParseTopicsIntoMap(args, indexedArgs, log.Topics[1:]); err != nil {
 			return nil, fmt.Errorf("parse topics %s.%s: %w", c.key, ev.Name, err)
 		}
 		return &ParsedEvent{
