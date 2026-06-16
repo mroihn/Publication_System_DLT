@@ -6,8 +6,6 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-// ──────────────────────────── External Interfaces ─────────────────────────────
-
 interface IDOIToken {
     function mint(
         address to,
@@ -23,27 +21,8 @@ interface IReviewOracle {
     function requestRandomReviewers(uint256 msId) external;
 }
 
-/**
- * @title DOILib
- * @notice Utility for generating DOI strings following the standard format:
- *         10.{registrant}/{suffix}
- *
- *  The registrant prefix "55121" is a placeholder for this academic system.
- *  The suffix encodes chain ID, manuscript ID, and version for uniqueness.
- *  Full DOI example: 10.55121/2024.11155111.0.1
- *                     └─ prefix ─┘ └── suffix ──┘
- *                                   year.chainId.msId.version
- */
 library DOILib {
-    /// @dev Registrant prefix issued by the International DOI Foundation.
     string internal constant DOI_PREFIX = "10.55121";
-
-    /**
-     * @notice Build a DOI string for a published manuscript.
-     * @param msId    The manuscript ID.
-     * @param version The manuscript version at publication time.
-     * @return doi    A string of the form "10.55121/{year}.{chainId}.{msId}.{version}"
-     */
     function buildDOI(
         uint256 msId,
         uint256 version
@@ -64,13 +43,10 @@ library DOILib {
         );
     }
 
-    /// @dev Approximate year from block.timestamp (UTC, good enough for a DOI suffix).
     function _blockYear() private view returns (uint256) {
-        // 1970-01-01 epoch; each year ≈ 365.2425 days = 31,556,952 seconds
         return 1970 + block.timestamp / 31_556_952;
     }
 
-    /// @dev Convert uint256 to its decimal ASCII representation.
     function _uint2str(uint256 value) private pure returns (string memory) {
         if (value == 0) return "0";
         uint256 temp = value;
@@ -89,34 +65,13 @@ library DOILib {
     }
 }
 
-/**
- * @title PublicationRegistry
- * @notice Core state-machine and controller for the decentralized publication
- *         system. Manages the full manuscript lifecycle from submission through
- *         peer review to publication.
- *
- * @dev Deployed behind a UUPS proxy for upgradeability.
- *
- *      State machine:
- *        SUBMITTED → CHECKING → UNDER_REVIEW → { ACCEPTED | REJECTED | REVISION_REQUESTED }
- *        ACCEPTED  → PUBLISHED  (via payPublicationFee)
- *        REVISION_REQUESTED → CHECKING  (via reviseManuscript)
- *
- *      Roles:
- *        ADMIN_ROLE      — contract governance, upgrades, configuration
- *        RESEARCHER_ROLE — manuscript submission and revision
- *        REVIEWER_ROLE   — submitting reviews
- *        ORACLE_ROLE     — reserved for ReviewOracle callbacks
- */
 contract PublicationRegistry is
     Initializable,
     UUPSUpgradeable,
     AccessControlUpgradeable
 {
     using DOILib for uint256;
-    // ──────────────────────────────── Enums ────────────────────────────────────────
-
-    /// @notice Manuscript lifecycle states.
+   
     enum Status {
         SUBMITTED,           // 0 — initial state
         CHECKING,            // 1 — plagiarism check in progress
@@ -127,21 +82,17 @@ contract PublicationRegistry is
         PUBLISHED            // 6 — fee paid, DOI minted
     }
 
-    /// @notice Reviewer verdict options.
     enum Verdict {
         ACCEPT,
         REJECT,
         REVISE
     }
 
-    // ──────────────────────────────── Structs ─────────────────────────────────────
-
-    /// @notice Core manuscript record.
     struct Manuscript {
         uint256 id;
         address author;
-        string cid;          // IPFS CID of the latest version
-        string metadata;     // JSON metadata string
+        string cid;          
+        string metadata;     
         Status status;
         uint256 version;
         uint256 plagiarismScore;
@@ -149,48 +100,27 @@ contract PublicationRegistry is
         uint256 acceptCount;
         uint256 rejectCount;
         uint256 reviseCount;
-        uint256 reviewCount; // total reviews submitted this round
-        string doi;          // DOI string in format 10.PREFIX/SUFFIX (set on publication)
+        uint256 reviewCount; 
+        string doi;
     }
-
-    // ──────────────────────────────── Roles ────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant RESEARCHER_ROLE = keccak256("RESEARCHER_ROLE");
     bytes32 public constant REVIEWER_ROLE = keccak256("REVIEWER_ROLE");
     bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
 
-    // ──────────────────────────────── Config ───────────────────────────────────────
-
-    /// @notice Maximum plagiarism score allowed (0-100). Scores above are rejected.
     uint256 public constant PLAGIARISM_THRESHOLD = 30;
-
-    /// @notice Publication fee in JRT (wei).
     uint256 public constant PUBLICATION_FEE = 100 * 1e18;
-
-    /// @notice Incentive paid to each reviewer in JRT (wei).
     uint256 public constant REVIEWER_INCENTIVE = 10 * 1e18;
 
-    // ──────────────────────────────── State ────────────────────────────────────────
-
-    /// @notice External contract references.
     IDOIToken public doiToken;
     IERC20 public journalToken;
     IReviewOracle public reviewOracle;
-
-    /// @notice Auto-incrementing manuscript ID counter.
     uint256 public nextManuscriptId;
 
-    /// @notice Manuscript ID → Manuscript data.
     mapping(uint256 => Manuscript) private _manuscripts;
-
-    /// @notice Manuscript ID → reviewer address → has reviewed flag.
     mapping(uint256 => mapping(address => bool)) public hasReviewed;
-
-    /// @notice Manuscript ID → reviewer address → review content hash.
     mapping(uint256 => mapping(address => bytes32)) public reviewHashes;
-
-    // ──────────────────────────────── Custom Errors ────────────────────────────────
 
     error InvalidState(uint256 msId, Status expected, Status actual);
     error NotAuthor(uint256 msId, address caller);
@@ -202,46 +132,19 @@ contract PublicationRegistry is
     error TransferFailed();
     error ZeroAddress();
 
-    // ──────────────────────────────── Events ───────────────────────────────────────
-
-    /// @notice Emitted when a new manuscript is submitted.
     event ManuscriptSubmitted(uint256 indexed msId, string cid);
-
-    /// @notice Emitted when a manuscript status decision is made.
     event DecisionMade(uint256 indexed msId, Status decision);
-
-    /// @notice Emitted when a reviewer receives their incentive payout.
     event IncentivePaid(address indexed reviewer, uint256 amount);
-
-    /// @notice Emitted when a manuscript is revised and resubmitted.
     event ManuscriptRevised(uint256 indexed msId, string newCid, uint256 version);
-
-    /// @notice Emitted when a review is submitted.
     event ReviewSubmitted(uint256 indexed msId, address indexed reviewer, Verdict verdict);
-
-    /// @notice Emitted when reviewers are assigned to a manuscript.
     event ReviewersAssigned(uint256 indexed msId, address[] reviewers);
-
-    /// @notice Emitted when the DOI NFT is minted upon publication.
     event DOIMinted(uint256 indexed msId, uint256 indexed doiTokenId);
-
-    /// @notice Emitted when a DOI is registered, carrying the full DOI string.
     event DOIRegistered(uint256 indexed msId, string doi, uint256 indexed doiTokenId);
-
-    // ──────────────────────────────── Initializer ─────────────────────────────────
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
-
-    /**
-     * @notice UUPS initializer — called once through the proxy.
-     * @param _doiToken      Address of the DOIToken contract.
-     * @param _journalToken  Address of the JournalToken contract.
-     * @param _reviewOracle  Address of the ReviewOracle contract.
-     * @param admin          Admin address to receive ADMIN_ROLE.
-     */
     function initialize(
         address _doiToken,
         address _journalToken,
@@ -262,14 +165,6 @@ contract PublicationRegistry is
         _grantRole(ORACLE_ROLE, _reviewOracle);
     }
 
-    // ──────────────────────────── Core Functions ──────────────────────────────────
-
-    /**
-     * @notice Submit a new manuscript. Automatically initiates a plagiarism check.
-     * @param cid       IPFS CID of the manuscript content.
-     * @param metadata  JSON-encoded metadata (title, abstract, authors, etc.).
-     * @return msId     The assigned manuscript ID.
-     */
     function submitManuscript(
         string calldata cid,
         string calldata metadata
@@ -281,23 +176,14 @@ contract PublicationRegistry is
         ms.author = msg.sender;
         ms.cid = cid;
         ms.metadata = metadata;
-        ms.status = Status.CHECKING; // Skip SUBMITTED, go straight to CHECKING
+        ms.status = Status.CHECKING;
         ms.version = 1;
 
         emit ManuscriptSubmitted(msId, cid);
 
-        // Automatically initiate plagiarism check
         reviewOracle.requestPlagiarismCheck(msId, cid);
     }
 
-    /**
-     * @notice Callback from ReviewOracle with plagiarism score.
-     * @dev Only callable by the ReviewOracle (ORACLE_ROLE).
-     *      If score ≤ threshold → request random reviewers (UNDER_REVIEW).
-     *      If score > threshold → REJECTED.
-     * @param msId  The manuscript ID.
-     * @param score The plagiarism similarity score (0-100).
-     */
     function fulfillPlagiarism(
         uint256 msId,
         uint256 score
@@ -313,19 +199,12 @@ contract PublicationRegistry is
             return;
         }
 
-        // Plagiarism check passed — request reviewer assignment
         ms.status = Status.UNDER_REVIEW;
         emit DecisionMade(msId, Status.UNDER_REVIEW);
 
         reviewOracle.requestRandomReviewers(msId);
     }
 
-    /**
-     * @notice Callback from ReviewOracle with randomly selected reviewers.
-     * @dev Only callable by the ReviewOracle (ORACLE_ROLE).
-     * @param msId      The manuscript ID.
-     * @param reviewers Array of selected reviewer addresses.
-     */
     function fulfillRandomReviewers(
         uint256 msId,
         address[] calldata reviewers
@@ -338,14 +217,6 @@ contract PublicationRegistry is
         emit ReviewersAssigned(msId, reviewers);
     }
 
-    /**
-     * @notice Submit a review for a manuscript.
-     * @dev Only callable by a reviewer assigned to this manuscript and holding
-     *      REVIEWER_ROLE. Decision logic triggers once all reviews are collected.
-     * @param msId    The manuscript ID.
-     * @param hash    Keccak-256 hash of the review content (stored off-chain).
-     * @param verdict The reviewer's verdict: ACCEPT, REJECT, or REVISE.
-     */
     function submitReview(
         uint256 msId,
         bytes32 hash,
@@ -354,11 +225,9 @@ contract PublicationRegistry is
         Manuscript storage ms = _manuscripts[msId];
         _requireState(msId, Status.UNDER_REVIEW);
 
-        // Verify caller is an assigned reviewer
         if (!_isAssignedReviewer(msId, msg.sender))
             revert NotAssignedReviewer(msId, msg.sender);
 
-        // Prevent double-review
         if (hasReviewed[msId][msg.sender])
             revert AlreadyReviewed(msId, msg.sender);
 
@@ -372,19 +241,11 @@ contract PublicationRegistry is
 
         emit ReviewSubmitted(msId, msg.sender, verdict);
 
-        // Trigger decision logic once all assigned reviewers have submitted
         if (ms.reviewCount == ms.reviewers.length) {
             _evaluateDecision(msId);
         }
     }
 
-    /**
-     * @notice Revise a manuscript after REVISION_REQUESTED.
-     * @dev Only the original author can revise. Increments the version counter
-     *      and re-triggers the plagiarism check.
-     * @param msId   The manuscript ID.
-     * @param newCid The IPFS CID of the revised content.
-     */
     function reviseManuscript(
         uint256 msId,
         string calldata newCid
@@ -397,23 +258,13 @@ contract PublicationRegistry is
         ms.version++;
         ms.status = Status.CHECKING;
 
-        // Reset review counters for the new round
         _resetReviewState(msId);
 
         emit ManuscriptRevised(msId, newCid, ms.version);
 
-        // Re-trigger plagiarism check
         reviewOracle.requestPlagiarismCheck(msId, newCid);
     }
 
-    /**
-     * @notice Pay the publication fee, mint the DOI NFT, and distribute
-     *         reviewer incentives.
-     * @dev Only the original author can call this, and the manuscript must
-     *      be in ACCEPTED state. The author must have approved sufficient
-     *      JRT allowance to this contract beforehand.
-     * @param msId The manuscript ID.
-     */
     function payPublicationFee(
         uint256 msId
     ) external onlyRole(RESEARCHER_ROLE) {
@@ -421,13 +272,11 @@ contract PublicationRegistry is
         _requireState(msId, Status.ACCEPTED);
         _requireAuthor(msId);
 
-        // Check allowance
         uint256 totalCost = PUBLICATION_FEE;
         uint256 allowed = journalToken.allowance(msg.sender, address(this));
         if (allowed < totalCost)
             revert InsufficientAllowance(totalCost, allowed);
 
-        // Transfer publication fee from author to this contract
         bool success = journalToken.transferFrom(
             msg.sender,
             address(this),
@@ -435,7 +284,6 @@ contract PublicationRegistry is
         );
         if (!success) revert TransferFailed();
 
-        // Distribute reviewer incentives
         address[] memory reviewers = ms.reviewers;
         for (uint256 i = 0; i < reviewers.length; i++) {
             bool paid = journalToken.transfer(reviewers[i], REVIEWER_INCENTIVE);
@@ -443,15 +291,9 @@ contract PublicationRegistry is
             emit IncentivePaid(reviewers[i], REVIEWER_INCENTIVE);
         }
 
-        // ── Generate a standards-compliant DOI ──────────────────────────────
-        // Format: 10.{PREFIX}/{year}.{chainId}.{msId}.{version}
-        // Example: 10.55121/2024.11155111.0.1
         string memory doi = DOILib.buildDOI(msId, ms.version);
         ms.doi = doi;
 
-        // ── Build the token metadata URI ────────────────────────────────────
-        // The tokenURI points to the IPFS content; the DOI is embedded in the
-        // JSON metadata so resolvers (CrossRef-style) can index it.
         string memory tokenURI_ = string(
             abi.encodePacked(
                 "ipfs://",
@@ -469,35 +311,18 @@ contract PublicationRegistry is
         emit DecisionMade(msId, Status.PUBLISHED);
     }
 
-    // ──────────────────────────── Admin Functions ──────────────────────────────────
-
-    /**
-     * @notice Grant RESEARCHER_ROLE to an address.
-     * @param researcher The address to grant the role to.
-     */
     function addResearcher(
         address researcher
     ) external onlyRole(ADMIN_ROLE) {
         grantRole(RESEARCHER_ROLE, researcher);
     }
 
-    /**
-     * @notice Grant REVIEWER_ROLE to an address.
-     * @param reviewer The address to grant the role to.
-     */
     function addReviewer(
         address reviewer
     ) external onlyRole(ADMIN_ROLE) {
         grantRole(REVIEWER_ROLE, reviewer);
     }
 
-    // ──────────────────────────────── View Functions ───────────────────────────────
-
-    /**
-     * @notice Get the full manuscript record.
-     * @param msId The manuscript ID.
-     * @return The Manuscript struct (excluding mappings).
-     */
     function getManuscript(
         uint256 msId
     ) external view returns (Manuscript memory) {
@@ -505,21 +330,11 @@ contract PublicationRegistry is
         return _manuscripts[msId];
     }
 
-    /**
-     * @notice Get the current status of a manuscript.
-     * @param msId The manuscript ID.
-     * @return The current Status enum value.
-     */
     function getStatus(uint256 msId) external view returns (Status) {
         if (msId >= nextManuscriptId) revert ManuscriptNotFound(msId);
         return _manuscripts[msId].status;
     }
 
-    /**
-     * @notice Get the list of reviewers assigned to a manuscript.
-     * @param msId The manuscript ID.
-     * @return Array of reviewer addresses.
-     */
     function getReviewers(
         uint256 msId
     ) external view returns (address[] memory) {
@@ -527,16 +342,6 @@ contract PublicationRegistry is
         return _manuscripts[msId].reviewers;
     }
 
-    // ──────────────────────────── Internal Helpers ─────────────────────────────────
-
-    /**
-     * @dev Evaluate the majority verdict and transition the manuscript state.
-     *      Decision rules (for 3 reviewers):
-     *        2+ ACCEPT → ACCEPTED
-     *        2+ REJECT → REJECTED
-     *        2+ REVISE → REVISION_REQUESTED
-     *        No clear majority → REVISION_REQUESTED (conservative)
-     */
     function _evaluateDecision(uint256 msId) internal {
         Manuscript storage ms = _manuscripts[msId];
         uint256 majority = (ms.reviewers.length / 2) + 1; // e.g. 2 for 3 reviewers
@@ -557,13 +362,9 @@ contract PublicationRegistry is
         }
     }
 
-    /**
-     * @dev Reset review-related state for a new review round (after revision).
-     */
     function _resetReviewState(uint256 msId) internal {
         Manuscript storage ms = _manuscripts[msId];
 
-        // Clear hasReviewed flags for previous reviewers
         for (uint256 i = 0; i < ms.reviewers.length; i++) {
             delete hasReviewed[msId][ms.reviewers[i]];
             delete reviewHashes[msId][ms.reviewers[i]];
@@ -577,25 +378,16 @@ contract PublicationRegistry is
         delete ms.reviewers;
     }
 
-    /**
-     * @dev Require that the manuscript is in the expected state.
-     */
     function _requireState(uint256 msId, Status expected) internal view {
         Status actual = _manuscripts[msId].status;
         if (actual != expected) revert InvalidState(msId, expected, actual);
     }
 
-    /**
-     * @dev Require that msg.sender is the manuscript author.
-     */
     function _requireAuthor(uint256 msId) internal view {
         if (_manuscripts[msId].author != msg.sender)
             revert NotAuthor(msId, msg.sender);
     }
 
-    /**
-     * @dev Check whether an address is in the manuscript's assigned reviewer list.
-     */
     function _isAssignedReviewer(
         uint256 msId,
         address reviewer
@@ -607,11 +399,6 @@ contract PublicationRegistry is
         return false;
     }
 
-    // ──────────────────────────── UUPS Authorization ──────────────────────────────
-
-    /**
-     * @dev Authorize contract upgrades — restricted to ADMIN_ROLE.
-     */
     function _authorizeUpgrade(
         address newImplementation
     ) internal override onlyRole(ADMIN_ROLE) {}
