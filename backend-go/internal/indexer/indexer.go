@@ -344,7 +344,11 @@ func (idx *Indexer) processLog(ctx context.Context, l types.Log) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("Indexer: indexed %s (block %d, tx %s)", event.Name, l.BlockNumber, l.TxHash.Hex()[:10])
+	return nil
 }
 
 func isTransient(err error) bool {

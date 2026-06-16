@@ -33,7 +33,7 @@ services:
       dockerfile: Dockerfile
     container_name: publishing_backend
     env_file:
-      - ./backend/.env
+      - ./backend-go/.env
     environment:
       - DB_HOST=database
       - DB_PORT=5432
