@@ -3,6 +3,7 @@ package handler
 import (
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mroihn/ta-proj/backend-go/internal/usecase"
@@ -14,6 +15,33 @@ type ManuscriptHandler struct {
 
 func NewManuscriptHandler(manuscriptUC *usecase.ManuscriptUseCase) *ManuscriptHandler {
 	return &ManuscriptHandler{manuscriptUC: manuscriptUC}
+}
+
+func (h *ManuscriptHandler) List(c *gin.Context) {
+	list, err := h.manuscriptUC.List(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *ManuscriptHandler) GetByID(c *gin.Context) {
+	msId, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid id"})
+		return
+	}
+	detail, err := h.manuscriptUC.GetByID(c.Request.Context(), msId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if detail == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "manuscript not found"})
+		return
+	}
+	c.JSON(http.StatusOK, detail)
 }
 
 func (h *ManuscriptHandler) Upload(c *gin.Context) {

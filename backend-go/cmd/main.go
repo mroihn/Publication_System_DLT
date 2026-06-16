@@ -36,12 +36,13 @@ func main() {
 
 	// Infrastructure
 	userRepo := repository.NewPostgresUserRepository(db)
+	msReader := repository.NewPostgresManuscriptReader(db)
 	pinata := service.NewPinataService(cfg.PinataJWT)
 	ethereum := service.NewEthereumService(cfg.RPCURL, cfg.OperatorPrivateKey, cfg.RegistryContractAddress)
 
 	// Use cases
 	authUC := usecase.NewAuthUseCase(userRepo, cfg.JWTSecret)
-	manuscriptUC := usecase.NewManuscriptUseCase(pinata, ethereum)
+	manuscriptUC := usecase.NewManuscriptUseCase(pinata, ethereum, msReader)
 	userUC := usecase.NewUserUseCase(userRepo)
 
 	// HTTP handlers
@@ -123,6 +124,8 @@ func main() {
 
 		manuscripts := v1.Group("/manuscripts")
 		{
+			manuscripts.GET("", manuscriptHandler.List)
+			manuscripts.GET("/:id", manuscriptHandler.GetByID)
 			manuscripts.POST("/upload", manuscriptHandler.Upload)
 		}
 	}

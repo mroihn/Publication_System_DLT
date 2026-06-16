@@ -1,114 +1,127 @@
 "use client";
 
-import { CheckCircle2, Clock, XCircle, FileText } from "lucide-react";
+import { useEffect, useState } from "react";
+import { FileText, Info, Loader2 } from "lucide-react";
 import Link from "next/link";
+import { apiClient } from "@/core/services/api.client";
+import { ManuscriptStepper } from "@/components/ManuscriptStepper";
 
-const STATUS_STEPS = ["CHECKING", "UNDER_REVIEW", "REVISION_REQUESTED", "ACCEPTED", "PUBLISHED", "REJECTED"];
+interface ManuscriptSummary {
+  ms_id: number;
+  cid: string;
+  status: string;
+  version: number;
+  author_address: string;
+  plagiarism_score: number | null;
+  submit_tx_hash: string;
+  submit_block: number;
+  created_at: string;
+  updated_at: string;
+}
 
-const MOCK_MANUSCRIPTS = [
-  { id: 1, title: "A Novel Approach to Quantum Computing", currentStatus: "UNDER_REVIEW", date: "2024-05-12" },
-  { id: 2, title: "Zero-Knowledge Proofs in Decentralized Systems", currentStatus: "PUBLISHED", date: "2024-03-08" },
-  { id: 3, title: "Inefficiencies in Consensus Algorithms", currentStatus: "REJECTED", date: "2024-01-22" }
-];
+function StatusBadge({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    CHECKING: "bg-amber-100 text-amber-800",
+    UNDER_REVIEW: "bg-blue-100 text-blue-800",
+    REVISION_REQUESTED: "bg-orange-100 text-orange-800",
+    ACCEPTED: "bg-green-100 text-green-800",
+    PUBLISHED: "bg-indigo-100 text-indigo-800",
+    REJECTED: "bg-red-100 text-red-800",
+  };
+  return (
+    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${colors[status] ?? "bg-gray-100 text-gray-700"}`}>
+      {status.replace(/_/g, " ")}
+    </span>
+  );
+}
 
 export default function StatusTrackerPage() {
-  const getStepStatus = (currentStatus: string, stepName: string) => {
-    const currentIndex = STATUS_STEPS.indexOf(currentStatus);
-    const stepIndex = STATUS_STEPS.indexOf(stepName);
-    
-    if (currentStatus === "REJECTED" && stepName === "REJECTED") return "current";
-    if (currentStatus === "REJECTED") return "past";
-    if (stepName === "REJECTED") return "upcoming";
+  const [manuscripts, setManuscripts] = useState<ManuscriptSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-    // Handle skip for REVISION_REQUESTED
-    if (currentStatus === "ACCEPTED" || currentStatus === "PUBLISHED") {
-        if (stepName === "REVISION_REQUESTED") return "skipped";
-    }
-
-    if (stepIndex < currentIndex) return "past";
-    if (stepIndex === currentIndex) return "current";
-    return "upcoming";
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    apiClient
+      .get<{ data: ManuscriptSummary[] }>("/manuscripts")
+      .then((res) => setManuscripts(res.data.data))
+      .catch(() => setError("Failed to load manuscripts."))
+      .finally(() => setLoading(false));
   };
+
+  useEffect(() => { load(); }, []);
 
   return (
     <div className="max-w-5xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-12">
-      <div className="mb-10">
+      <div className="mb-8">
         <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900 mb-4 tracking-tight">
           Manuscript Status Tracker
         </h1>
-        <p className="text-gray-600 text-lg">
+        <p className="text-gray-600 text-lg mb-4">
           Track the real-time publication progress of your submissions on the decentralized network.
         </p>
+        <div className="flex items-start gap-2 p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-sm text-indigo-700">
+          <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>All submissions are recorded on Ethereum Sepolia. Transaction hashes link to the public block explorer for independent verification.</span>
+        </div>
       </div>
-      
-      <div className="space-y-8">
-        {MOCK_MANUSCRIPTS.map((ms) => (
-          <div key={ms.id} className="bg-white border border-gray-200 rounded-3xl p-8 shadow-sm">
-            <div className="flex justify-between items-start mb-8">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">{ms.title}</h2>
-                <p className="text-sm text-gray-500 font-medium">Submitted on {ms.date}</p>
+
+      {loading && (
+        <div className="flex justify-center py-20">
+          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+        </div>
+      )}
+
+      {error && (
+        <div className="text-center py-20">
+          <p className="text-red-600 font-medium mb-4">{error}</p>
+          <button
+            onClick={load}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && manuscripts.length === 0 && (
+        <div className="text-center py-20 text-gray-500">
+          No manuscripts found.
+        </div>
+      )}
+
+      {!loading && !error && manuscripts.length > 0 && (
+        <div className="space-y-8">
+          {manuscripts.map((ms) => (
+            <div key={ms.ms_id} className="bg-white border border-gray-200 rounded-3xl p-8 shadow-sm">
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <div className="flex items-center gap-3 mb-1">
+                    <h2 className="text-xl font-bold text-gray-900">Manuscript #{ms.ms_id}</h2>
+                    <StatusBadge status={ms.status} />
+                  </div>
+                  <p className="text-sm text-gray-500 font-mono">
+                    CID: {ms.cid.slice(0, 16)}…
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Submitted {new Date(ms.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <Link
+                  href={`/tracker/${ms.ms_id}`}
+                  className="flex items-center space-x-2 text-indigo-600 hover:text-indigo-700 font-medium transition-colors bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-100"
+                >
+                  <FileText className="w-4 h-4" />
+                  <span>View Details</span>
+                </Link>
               </div>
-              <Link 
-                href={`/articles/${ms.id}`}
-                className="flex items-center space-x-2 text-indigo-600 hover:text-indigo-700 font-medium transition-colors bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-100"
-              >
-                <FileText className="w-4 h-4" />
-                <span>View Details</span>
-              </Link>
+
+              <ManuscriptStepper status={ms.status} />
             </div>
-            
-            <div className="relative">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center space-y-6 md:space-y-0 w-full">
-                {STATUS_STEPS.filter(s => s !== "REJECTED" && s !== "REVISION_REQUESTED").map((step, idx, arr) => {
-                  const status = getStepStatus(ms.currentStatus, step);
-                  return (
-                    <div key={step} className="flex items-center flex-1 relative z-10 w-full">
-                      <div className="flex flex-col items-center flex-shrink-0">
-                        <div className={`w-12 h-12 rounded-full flex items-center justify-center border-2 transition-colors ${
-                          status === "past" ? "bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-200" :
-                          status === "current" ? "border-indigo-600 text-indigo-600 bg-white ring-4 ring-indigo-50" :
-                          "border-gray-300 text-gray-400 bg-white"
-                        }`}>
-                          {status === "past" ? <CheckCircle2 className="w-6 h-6" /> : <Clock className="w-6 h-6" />}
-                        </div>
-                        <span className={`text-xs font-bold mt-3 text-center w-28 uppercase tracking-wider ${
-                            status === "past" || status === "current" ? "text-gray-900" : "text-gray-400"
-                        }`}>
-                          {step.replace('_', ' ')}
-                        </span>
-                      </div>
-                      
-                      {/* Progress Line */}
-                      {idx < arr.length - 1 && (
-                        <div className="hidden md:block flex-1 h-1.5 mx-4 rounded-full bg-gray-100 relative overflow-hidden">
-                           <div className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ${
-                             status === "past" ? "w-full bg-indigo-600" : "w-0 bg-indigo-600"
-                           }`} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            
-            {ms.currentStatus === "REJECTED" && (
-              <div className="mt-8 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center text-red-800 shadow-sm">
-                <XCircle className="w-6 h-6 mr-3 flex-shrink-0" /> 
-                <span className="font-medium">This manuscript has been rejected by the peer review consensus and cannot proceed.</span>
-              </div>
-            )}
-            
-            {ms.currentStatus === "REVISION_REQUESTED" && (
-              <div className="mt-8 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center text-amber-800 shadow-sm">
-                <Clock className="w-6 h-6 mr-3 flex-shrink-0" /> 
-                <span className="font-medium">The reviewers have requested revisions. Please submit a revised manuscript to continue.</span>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
