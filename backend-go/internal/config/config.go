@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 type Config struct {
 	Port                    string
@@ -9,6 +12,19 @@ type Config struct {
 	OperatorPrivateKey      string
 	RPCURL                  string
 	RegistryContractAddress string
+
+	DBHost     string
+	DBPort     string
+	DBUser     string
+	DBPassword string
+	DBName     string
+	DBSSLMode  string
+
+	ReviewOracleContractAddress string
+	DOITokenContractAddress     string
+	IndexerStartBlock           uint64
+	IndexerPollIntervalMs       int
+	IndexerRPCWSS               string
 }
 
 func Load() *Config {
@@ -19,6 +35,19 @@ func Load() *Config {
 		OperatorPrivateKey:      getEnv("OPERATOR_PRIVATE_KEY", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"),
 		RPCURL:                  getEnv("RPC_URL", "http://127.0.0.1:8545"),
 		RegistryContractAddress: getEnv("REGISTRY_CONTRACT_ADDRESS", "0x0000000000000000000000000000000000000000"),
+
+		DBHost:     getEnv("DB_HOST", "localhost"),
+		DBPort:     getEnv("DB_PORT", "5432"),
+		DBUser:     getEnv("DB_USER", "postgres"),
+		DBPassword: getEnv("DB_PASSWORD", "postgres"),
+		DBName:     getEnv("DB_NAME", "publish_db"),
+		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
+
+		ReviewOracleContractAddress: getEnv("REVIEW_ORACLE_CONTRACT_ADDRESS", "0x0000000000000000000000000000000000000000"),
+		DOITokenContractAddress:     getEnv("DOI_TOKEN_CONTRACT_ADDRESS", "0x0000000000000000000000000000000000000000"),
+		IndexerStartBlock:           parseUint64(getEnv("INDEXER_START_BLOCK", "0")),
+		IndexerPollIntervalMs:       parseInt(getEnv("INDEXER_POLL_INTERVAL_MS", "5000")),
+		IndexerRPCWSS:               getEnv("INDEXER_RPC_WSS", ""),
 	}
 }
 
@@ -27,4 +56,14 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func parseUint64(s string) uint64 {
+	v, _ := strconv.ParseUint(s, 10, 64)
+	return v
+}
+
+func parseInt(s string) int {
+	v, _ := strconv.Atoi(s)
+	return v
 }

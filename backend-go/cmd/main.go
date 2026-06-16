@@ -1,11 +1,19 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mroihn/ta-proj/backend-go/internal/config"
+	dbpkg "github.com/mroihn/ta-proj/backend-go/internal/db"
 	"github.com/mroihn/ta-proj/backend-go/internal/handler"
+	"github.com/mroihn/ta-proj/backend-go/internal/indexer"
+	"github.com/mroihn/ta-proj/backend-go/internal/indexer/blockchain"
+	idxhandler "github.com/mroihn/ta-proj/backend-go/internal/indexer/handler"
+	"github.com/mroihn/ta-proj/backend-go/internal/indexer/parser"
+	idxrepo "github.com/mroihn/ta-proj/backend-go/internal/indexer/repository"
 	"github.com/mroihn/ta-proj/backend-go/internal/middleware"
 	"github.com/mroihn/ta-proj/backend-go/internal/repository"
 	"github.com/mroihn/ta-proj/backend-go/internal/service"
@@ -15,8 +23,19 @@ import (
 func main() {
 	cfg := config.Load()
 
+	// Database
+	db, err := dbpkg.Open(cfg)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	if err := dbpkg.RunMigrations(db); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
+
 	// Infrastructure
-	userRepo := repository.NewInMemoryUserRepository()
+	userRepo := repository.NewPostgresUserRepository(db)
 	pinata := service.NewPinataService(cfg.PinataJWT)
 	ethereum := service.NewEthereumService(cfg.RPCURL, cfg.OperatorPrivateKey, cfg.RegistryContractAddress)
 
@@ -25,10 +44,50 @@ func main() {
 	manuscriptUC := usecase.NewManuscriptUseCase(pinata, ethereum)
 	userUC := usecase.NewUserUseCase(userRepo)
 
-	// Handlers
+	// HTTP handlers
 	authHandler := handler.NewAuthHandler(authUC)
 	manuscriptHandler := handler.NewManuscriptHandler(manuscriptUC)
 	userHandler := handler.NewUserHandler(userUC)
+
+	// Indexer (disabled if no registry address configured)
+	if cfg.RegistryContractAddress != "" &&
+		cfg.RegistryContractAddress != "0x0000000000000000000000000000000000000000" {
+
+		rpcURL := firstOf(cfg.IndexerRPCWSS, cfg.RPCURL)
+		ethClient, err := blockchain.NewEthClientAdapter(rpcURL)
+		if err != nil {
+			log.Printf("Indexer: failed to connect to RPC (%s): %v — indexer disabled", rpcURL, err)
+		} else {
+			evtParser, err := parser.NewMultiContractParser(
+				cfg.RegistryContractAddress,
+				cfg.ReviewOracleContractAddress,
+				cfg.DOITokenContractAddress,
+			)
+			if err != nil {
+				log.Printf("Indexer: failed to parse ABIs: %v — indexer disabled", err)
+				ethClient.Close()
+			} else {
+				repo := idxrepo.NewPostgresIndexerRepository(db)
+				handlers := idxhandler.BuildHandlerMap(repo)
+				idx := indexer.New(ethClient, evtParser, handlers, repo, db, indexer.Config{
+					RegistryAddress: cfg.RegistryContractAddress,
+					OracleAddress:   cfg.ReviewOracleContractAddress,
+					DOITokenAddress: cfg.DOITokenContractAddress,
+					StartBlock:      cfg.IndexerStartBlock,
+					PollIntervalMs:  cfg.IndexerPollIntervalMs,
+					UseWebSocket:    cfg.IndexerRPCWSS != "",
+				})
+
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				go func() {
+					if err := idx.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+						log.Printf("Indexer stopped: %v", err)
+					}
+				}()
+			}
+		}
+	}
 
 	// Router
 	r := gin.Default()
@@ -73,4 +132,13 @@ func main() {
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+func firstOf(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
