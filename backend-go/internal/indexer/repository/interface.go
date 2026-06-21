@@ -8,7 +8,8 @@ import (
 type IndexerRepository interface {
 	// MarkProcessed inserts the (txHash, logIndex) pair inside the provided tx.
 	// Returns true if the event was already processed (idempotency guard).
-	MarkProcessed(ctx context.Context, tx *sql.Tx, txHash string, logIndex uint, blockNumber uint64, eventName, contractAddr string) (bool, error)
+	// msId is optional — pass nil for events that are not manuscript-scoped.
+	MarkProcessed(ctx context.Context, tx *sql.Tx, txHash string, logIndex uint, blockNumber uint64, eventName, contractAddr string, msId *uint64) (bool, error)
 
 	GetLastBlock(ctx context.Context, contractKey string) (uint64, error)
 	SaveLastBlock(ctx context.Context, tx *sql.Tx, contractKey string, block uint64) error

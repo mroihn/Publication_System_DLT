@@ -51,6 +51,7 @@ func main() {
 	userHandler := handler.NewUserHandler(userUC)
 
 	// Indexer (disabled if no registry address configured)
+	var idx *indexer.Indexer
 	if cfg.RegistryContractAddress != "" &&
 		cfg.RegistryContractAddress != "0x0000000000000000000000000000000000000000" {
 
@@ -70,7 +71,7 @@ func main() {
 			} else {
 				repo := idxrepo.NewPostgresIndexerRepository(db)
 				handlers := idxhandler.BuildHandlerMap(repo)
-				idx := indexer.New(ethClient, evtParser, handlers, repo, db, indexer.Config{
+				idx = indexer.New(ethClient, evtParser, handlers, repo, db, indexer.Config{
 					RegistryAddress: cfg.RegistryContractAddress,
 					OracleAddress:   cfg.ReviewOracleContractAddress,
 					DOITokenAddress: cfg.DOITokenContractAddress,
@@ -90,6 +91,12 @@ func main() {
 		}
 	}
 
+	var getIndexerStatus func(ctx context.Context) any
+	if idx != nil {
+		getIndexerStatus = func(ctx context.Context) any { return idx.Status(ctx) }
+	}
+	healthHandler := handler.NewHealthHandler(getIndexerStatus)
+
 	// Router
 	r := gin.Default()
 	r.Use(func(c *gin.Context) {
@@ -105,7 +112,7 @@ func main() {
 
 	v1 := r.Group("/api/v1")
 	{
-		v1.GET("/health", authHandler.Health)
+		v1.GET("/health", healthHandler.Health)
 
 		auth := v1.Group("/auth")
 		{

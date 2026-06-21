@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -29,13 +30,21 @@ type Config struct {
 	UseWebSocket    bool
 }
 
+type IndexerStatus struct {
+	Mode           string            `json:"mode"`
+	Subscribed     bool              `json:"subscribed"`
+	LastBlocks     map[string]uint64 `json:"last_blocks"`
+	TotalProcessed int64             `json:"total_processed"`
+}
+
 type Indexer struct {
-	client   blockchain.BlockchainClient
-	parser   parser.EventParser
-	handlers map[string]handler.EventHandler
-	repo     idxrepo.IndexerRepository
-	db       *sql.DB
-	cfg      Config
+	client     blockchain.BlockchainClient
+	parser     parser.EventParser
+	handlers   map[string]handler.EventHandler
+	repo       idxrepo.IndexerRepository
+	db         *sql.DB
+	cfg        Config
+	subscribed atomic.Bool
 }
 
 func New(
@@ -54,6 +63,25 @@ func New(
 		db:       db,
 		cfg:      cfg,
 	}
+}
+
+// Status returns current indexer observability data, read directly from the DB.
+func (idx *Indexer) Status(ctx context.Context) IndexerStatus {
+	mode := "polling"
+	if idx.cfg.UseWebSocket {
+		mode = "websocket"
+	}
+	s := IndexerStatus{
+		Mode:       mode,
+		Subscribed: idx.cfg.UseWebSocket && idx.subscribed.Load(),
+		LastBlocks: make(map[string]uint64),
+	}
+	for _, key := range []string{"registry", "oracle", "doitoken"} {
+		block, _ := idx.repo.GetLastBlock(ctx, key)
+		s.LastBlocks[key] = block
+	}
+	_ = idx.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM processed_events`).Scan(&s.TotalProcessed)
+	return s
 }
 
 // RunHistoricalOnly runs only the historical sync phase and returns when complete.
@@ -194,6 +222,7 @@ func (idx *Indexer) liveSyncWSS(ctx context.Context) error {
 			}
 		}
 		backoff = time.Second
+		idx.subscribed.Store(true)
 		log.Println("Indexer: WebSocket subscription active")
 
 	readLoop:
@@ -204,6 +233,7 @@ func (idx *Indexer) liveSyncWSS(ctx context.Context) error {
 				return ctx.Err()
 			case err := <-sub.Err():
 				log.Printf("Indexer: subscription error: %v, reconnecting", err)
+				idx.subscribed.Store(false)
 				sub.Unsubscribe()
 				break readLoop
 			case l := <-ch:
@@ -325,8 +355,16 @@ func (idx *Indexer) processLog(ctx context.Context, l types.Log) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	var msId *uint64
+	if raw, ok := event.Args["msId"]; ok {
+		if bi, ok := raw.(*big.Int); ok {
+			v := bi.Uint64()
+			msId = &v
+		}
+	}
+
 	already, err := idx.repo.MarkProcessed(ctx, tx,
-		l.TxHash.Hex(), uint(l.Index), l.BlockNumber, event.Name, l.Address.Hex(),
+		l.TxHash.Hex(), uint(l.Index), l.BlockNumber, event.Name, l.Address.Hex(), msId,
 	)
 	if err != nil {
 		return err

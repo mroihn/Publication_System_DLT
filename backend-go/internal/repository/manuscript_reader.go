@@ -54,18 +54,28 @@ type PlagiarismRequest struct {
 	FulfilledAt *time.Time `json:"fulfilled_at"`
 }
 
+type ProcessedEvent struct {
+	EventName    string    `json:"event_name"`
+	TxHash       string    `json:"tx_hash"`
+	BlockNumber  uint64    `json:"block_number"`
+	LogIndex     uint      `json:"log_index"`
+	ContractAddr string    `json:"contract_addr"`
+	ProcessedAt  time.Time `json:"processed_at"`
+}
+
 type ManuscriptDetail struct {
 	ManuscriptSummary
-	Metadata       string               `json:"metadata"`
-	DOI            *string              `json:"doi"`
-	DOITokenID     *int64               `json:"doi_token_id"`
-	AcceptCount    int                  `json:"accept_count"`
-	RejectCount    int                  `json:"reject_count"`
-	ReviseCount    int                  `json:"revise_count"`
-	Reviewers      []ManuscriptReviewer `json:"reviewers"`
-	Reviews        []ManuscriptReview   `json:"reviews"`
-	Revisions      []ManuscriptRevision `json:"revisions"`
-	PlagiarismReqs []PlagiarismRequest  `json:"plagiarism_requests"`
+	Metadata        string               `json:"metadata"`
+	DOI             *string              `json:"doi"`
+	DOITokenID      *int64               `json:"doi_token_id"`
+	AcceptCount     int                  `json:"accept_count"`
+	RejectCount     int                  `json:"reject_count"`
+	ReviseCount     int                  `json:"revise_count"`
+	Reviewers       []ManuscriptReviewer `json:"reviewers"`
+	Reviews         []ManuscriptReview   `json:"reviews"`
+	Revisions       []ManuscriptRevision `json:"revisions"`
+	PlagiarismReqs  []PlagiarismRequest  `json:"plagiarism_requests"`
+	Events          []ProcessedEvent     `json:"events"`
 }
 
 type PostgresManuscriptReader struct {
@@ -219,6 +229,31 @@ func (r *PostgresManuscriptReader) GetManuscriptByID(ctx context.Context, msId u
 		d.PlagiarismReqs = []PlagiarismRequest{}
 	}
 	if err := prows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Processed events (on-chain audit log, linked via ms_id)
+	erows, err := r.db.QueryContext(ctx, `
+		SELECT event_name, COALESCE(tx_hash,''), block_number, log_index, contract_addr, processed_at
+		FROM processed_events
+		WHERE ms_id = $1
+		ORDER BY block_number, log_index
+	`, msId)
+	if err != nil {
+		return nil, err
+	}
+	defer erows.Close()
+	for erows.Next() {
+		var pe ProcessedEvent
+		if err := erows.Scan(&pe.EventName, &pe.TxHash, &pe.BlockNumber, &pe.LogIndex, &pe.ContractAddr, &pe.ProcessedAt); err != nil {
+			return nil, err
+		}
+		d.Events = append(d.Events, pe)
+	}
+	if d.Events == nil {
+		d.Events = []ProcessedEvent{}
+	}
+	if err := erows.Err(); err != nil {
 		return nil, err
 	}
 

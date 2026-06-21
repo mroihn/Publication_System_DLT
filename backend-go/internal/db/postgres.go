@@ -11,7 +11,10 @@ import (
 )
 
 //go:embed migrations/001_initial_schema.up.sql
-var migrationUp string
+var migration001 string
+
+//go:embed migrations/002_processed_events_ms_id.up.sql
+var migration002 string
 
 func Open(cfg *config.Config) (*sql.DB, error) {
 	dsn := fmt.Sprintf(
@@ -32,6 +35,10 @@ func Open(cfg *config.Config) (*sql.DB, error) {
 }
 
 func RunMigrations(db *sql.DB) error {
-	_, err := db.Exec(migrationUp)
-	return err
+	for _, sql := range []string{migration001, migration002} {
+		if _, err := db.Exec(sql); err != nil {
+			return err
+		}
+	}
+	return nil
 }

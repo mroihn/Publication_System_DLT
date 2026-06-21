@@ -20,7 +20,7 @@ func NewPinataService(jwt string) *PinataService {
 }
 
 func (s *PinataService) UploadFile(data []byte, filename string) (string, error) {
-	if s.jwt == "" || s.jwt == "your_pinata_jwt_token_here" {
+	if s.jwt == "" {
 		fmt.Println("PINATA_JWT not configured. Returning mock CID.")
 		return mockCID, nil
 	}

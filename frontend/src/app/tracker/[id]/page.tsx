@@ -48,6 +48,15 @@ interface PlagiarismRequest {
   fulfilled_at: string | null;
 }
 
+interface ProcessedEvent {
+  event_name: string;
+  tx_hash: string;
+  block_number: number;
+  log_index: number;
+  contract_addr: string;
+  processed_at: string;
+}
+
 interface ManuscriptDetail {
   ms_id: number;
   cid: string;
@@ -69,6 +78,7 @@ interface ManuscriptDetail {
   reviews: Review[];
   revisions: Revision[];
   plagiarism_requests: PlagiarismRequest[];
+  events: ProcessedEvent[];
 }
 
 const EXPLORER = "https://sepolia.etherscan.io";
@@ -418,30 +428,56 @@ export default function ManuscriptDetailPage() {
         </div>
       )}
 
-      {/* Blockchain timeline */}
+      {/* Blockchain event timeline */}
       <div className="bg-white border border-gray-200 rounded-3xl p-8 shadow-sm">
         <h2 className="text-lg font-bold text-gray-900 mb-6">Blockchain Event Timeline</h2>
-        <div className="relative pl-6">
-          <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-indigo-100" />
-          <ul className="space-y-6">
-            {timeline.map((ev, i) => (
-              <li key={i} className="relative flex gap-4">
-                <div className="absolute -left-4 top-0.5 w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center text-white ring-4 ring-white">
-                  <span className="scale-75">{ev.icon}</span>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{ev.label}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{fmt(ev.time)}</p>
-                  {ev.txHash && (
-                    <div className="mt-1">
-                      <TxLink hash={ev.txHash} />
-                    </div>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
+        {ms.events.length > 0 ? (
+          <div className="relative pl-6">
+            <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-indigo-100" />
+            <ul className="space-y-6">
+              {ms.events.map((ev, i) => (
+                <li key={i} className="relative flex gap-4">
+                  <div className="absolute -left-4 top-0.5 w-4 h-4 rounded-full bg-indigo-600 ring-4 ring-white" />
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      {ev.event_name.replace(/([A-Z])/g, " $1").trim()}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Block {ev.block_number} · {fmt(ev.processed_at)}
+                    </p>
+                    {ev.tx_hash && (
+                      <div className="mt-1">
+                        <TxLink hash={ev.tx_hash} />
+                      </div>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <div className="relative pl-6">
+            <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-indigo-100" />
+            <ul className="space-y-6">
+              {timeline.map((ev, i) => (
+                <li key={i} className="relative flex gap-4">
+                  <div className="absolute -left-4 top-0.5 w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center text-white ring-4 ring-white">
+                    <span className="scale-75">{ev.icon}</span>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{ev.label}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{fmt(ev.time)}</p>
+                    {ev.txHash && (
+                      <div className="mt-1">
+                        <TxLink hash={ev.txHash} />
+                      </div>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
     </div>

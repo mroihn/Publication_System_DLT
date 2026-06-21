@@ -15,12 +15,12 @@ func NewPostgresIndexerRepository(db *sql.DB) *PostgresIndexerRepository {
 	return &PostgresIndexerRepository{db: db}
 }
 
-func (r *PostgresIndexerRepository) MarkProcessed(ctx context.Context, tx *sql.Tx, txHash string, logIndex uint, blockNumber uint64, eventName, contractAddr string) (bool, error) {
+func (r *PostgresIndexerRepository) MarkProcessed(ctx context.Context, tx *sql.Tx, txHash string, logIndex uint, blockNumber uint64, eventName, contractAddr string, msId *uint64) (bool, error) {
 	result, err := tx.ExecContext(ctx,
-		`INSERT INTO processed_events (tx_hash, log_index, block_number, event_name, contract_addr)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO processed_events (tx_hash, log_index, block_number, event_name, contract_addr, ms_id)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (tx_hash, log_index) DO NOTHING`,
-		txHash, logIndex, blockNumber, eventName, contractAddr,
+		txHash, logIndex, blockNumber, eventName, contractAddr, msId,
 	)
 	if err != nil {
 		return false, err

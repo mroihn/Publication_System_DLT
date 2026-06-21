@@ -28,11 +28,13 @@ type EthereumService struct {
 }
 
 func NewEthereumService(rpcURL, privateKeyHex, contractAddress string) *EthereumService {
-	pk := strings.TrimPrefix(privateKeyHex, "0x")
-	key, err := crypto.HexToECDSA(pk)
-	if err != nil {
-		fmt.Printf("Warning: invalid OPERATOR_PRIVATE_KEY, using zero key: %v\n", err)
-		key, _ = crypto.HexToECDSA("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+	var key *ecdsa.PrivateKey
+	if pk := strings.TrimPrefix(privateKeyHex, "0x"); pk != "" {
+		var err error
+		key, err = crypto.HexToECDSA(pk)
+		if err != nil {
+			fmt.Printf("Warning: invalid OPERATOR_PRIVATE_KEY: %v — on-chain submission disabled\n", err)
+		}
 	}
 	return &EthereumService{
 		rpcURL:          rpcURL,
@@ -44,6 +46,10 @@ func NewEthereumService(rpcURL, privateKeyHex, contractAddress string) *Ethereum
 func (s *EthereumService) SubmitManuscript(cid, title string) (string, error) {
 	if s.contractAddress == "" || s.contractAddress == zeroAddress {
 		fmt.Println("REGISTRY_CONTRACT_ADDRESS not configured. Returning mock transaction hash.")
+		return mockTxHash, nil
+	}
+	if s.privateKey == nil {
+		fmt.Println("OPERATOR_PRIVATE_KEY not configured. Returning mock transaction hash.")
 		return mockTxHash, nil
 	}
 
