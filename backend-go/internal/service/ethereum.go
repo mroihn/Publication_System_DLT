@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -16,11 +19,22 @@ import (
 )
 
 const (
-	mockTxHash      = "0xMockTxHashabcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-	zeroAddress     = "0x0000000000000000000000000000000000000000"
+	mockTxHash  = "0xMockTxHashabcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+	zeroAddress = "0x0000000000000000000000000000000000000000"
+
 	registryABIJSON = `[
 		{"inputs":[{"name":"cid","type":"string"},{"name":"metadata","type":"string"}],"name":"submitManuscript","outputs":[],"stateMutability":"nonpayable","type":"function"},
-		{"inputs":[{"name":"msId","type":"uint256"},{"name":"hash","type":"bytes32"},{"name":"verdict","type":"uint8"}],"name":"submitReview","outputs":[],"stateMutability":"nonpayable","type":"function"}
+		{"inputs":[{"name":"msId","type":"uint256"},{"name":"hash","type":"bytes32"},{"name":"verdict","type":"uint8"}],"name":"submitReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
+
+		{"type":"error","name":"InvalidState","inputs":[{"name":"msId","type":"uint256"},{"name":"expected","type":"uint8"},{"name":"actual","type":"uint8"}]},
+		{"type":"error","name":"NotAuthor","inputs":[{"name":"msId","type":"uint256"},{"name":"caller","type":"address"}]},
+		{"type":"error","name":"NotAssignedReviewer","inputs":[{"name":"msId","type":"uint256"},{"name":"caller","type":"address"}]},
+		{"type":"error","name":"AlreadyReviewed","inputs":[{"name":"msId","type":"uint256"},{"name":"reviewer","type":"address"}]},
+		{"type":"error","name":"InsufficientAllowance","inputs":[{"name":"required","type":"uint256"},{"name":"actual","type":"uint256"}]},
+		{"type":"error","name":"ManuscriptNotFound","inputs":[{"name":"msId","type":"uint256"}]},
+		{"type":"error","name":"PlagiarismThresholdExceeded","inputs":[{"name":"msId","type":"uint256"},{"name":"score","type":"uint256"}]},
+		{"type":"error","name":"TransferFailed","inputs":[]},
+		{"type":"error","name":"ZeroAddress","inputs":[]}
 	]`
 )
 
@@ -46,7 +60,7 @@ func NewEthereumService(rpcURL, privateKeyHex, contractAddress string) *Ethereum
 	}
 }
 
-func (s *EthereumService) sendTx(methodName string, args ...interface{}) (string, error) {
+func (s *EthereumService) sendTx(methodName string, args ...any) (string, error) {
 	if s.contractAddress == "" || s.contractAddress == zeroAddress {
 		fmt.Printf("%s: REGISTRY_CONTRACT_ADDRESS not configured, returning mock tx\n", methodName)
 		return mockTxHash, nil
@@ -58,8 +72,7 @@ func (s *EthereumService) sendTx(methodName string, args ...interface{}) (string
 
 	client, err := ethclient.Dial(s.rpcURL)
 	if err != nil {
-		fmt.Printf("%s: RPC dial error: %v — returning mock tx\n", methodName, err)
-		return mockTxHash, nil
+		return "", fmt.Errorf("RPC connection failed: %w", err)
 	}
 	defer client.Close()
 
@@ -73,21 +86,23 @@ func (s *EthereumService) sendTx(methodName string, args ...interface{}) (string
 		return "", fmt.Errorf("ABI encode %s: %w", methodName, err)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
 	pubKey := s.privateKey.Public().(*ecdsa.PublicKey)
 	fromAddress := crypto.PubkeyToAddress(*pubKey)
 
 	nonce, err := client.PendingNonceAt(ctx, fromAddress)
 	if err != nil {
-		return "", fmt.Errorf("nonce: %w", err)
+		return "", fmt.Errorf("get nonce: %w", err)
 	}
 	gasPrice, err := client.SuggestGasPrice(ctx)
 	if err != nil {
-		return "", fmt.Errorf("gas price: %w", err)
+		return "", fmt.Errorf("get gas price: %w", err)
 	}
 	chainID, err := client.NetworkID(ctx)
 	if err != nil {
-		return "", fmt.Errorf("chain id: %w", err)
+		return "", fmt.Errorf("get chain ID: %w", err)
 	}
 
 	toAddr := common.HexToAddress(s.contractAddress)
@@ -98,9 +113,75 @@ func (s *EthereumService) sendTx(methodName string, args ...interface{}) (string
 		return "", fmt.Errorf("sign tx: %w", err)
 	}
 	if err := client.SendTransaction(ctx, signed); err != nil {
-		return "", fmt.Errorf("send tx: %w", err)
+		return "", fmt.Errorf("broadcast tx: %w", err)
 	}
+
+	receipt, err := bind.WaitMined(ctx, client, signed)
+	if err != nil {
+		return signed.Hash().Hex(), fmt.Errorf("tx broadcast succeeded but mining confirmation timed out: %w", err)
+	}
+
+	if receipt.Status == types.ReceiptStatusFailed {
+		reason := revertReason(ctx, client, fromAddress, toAddr, data, receipt.BlockNumber)
+		return "", fmt.Errorf("%s", reason)
+	}
+
 	return signed.Hash().Hex(), nil
+}
+
+func revertReason(ctx context.Context, client *ethclient.Client, from, to common.Address, data []byte, blockNum *big.Int) string {
+	msg := ethereum.CallMsg{From: from, To: &to, Data: data}
+	_, callErr := client.CallContract(ctx, msg, blockNum)
+	if callErr == nil {
+		return "transaction reverted (simulation succeeded — possibly a gas issue)"
+	}
+
+	type dataError interface{ ErrorData() any }
+	if de, ok := callErr.(dataError); ok {
+		if raw, ok := de.ErrorData().(string); ok && strings.HasPrefix(raw, "0x") {
+			payload := common.FromHex(raw)
+
+			if reason, err := abi.UnpackRevert(payload); err == nil {
+				return reason
+			}
+
+			if len(payload) >= 4 {
+				if msg := decodeCustomError(payload); msg != "" {
+					return msg
+				}
+			}
+
+			return fmt.Sprintf("contract error (raw): %s", raw)
+		}
+	}
+
+	return callErr.Error()
+}
+
+func decodeCustomError(payload []byte) string {
+	parsedABI, err := abi.JSON(strings.NewReader(registryABIJSON))
+	if err != nil {
+		return ""
+	}
+	var selector [4]byte
+	copy(selector[:], payload[:4])
+	for _, abiErr := range parsedABI.Errors {
+		if [4]byte(abiErr.ID[:4]) == selector {
+			if len(abiErr.Inputs) == 0 {
+				return abiErr.Name
+			}
+			vals, err := abiErr.Inputs.Unpack(payload[4:])
+			if err != nil {
+				return abiErr.Name
+			}
+			parts := make([]string, len(abiErr.Inputs))
+			for i, inp := range abiErr.Inputs {
+				parts[i] = fmt.Sprintf("%s=%v", inp.Name, vals[i])
+			}
+			return fmt.Sprintf("%s(%s)", abiErr.Name, strings.Join(parts, ", "))
+		}
+	}
+	return ""
 }
 
 func (s *EthereumService) SubmitManuscript(cid, title string) (string, error) {
