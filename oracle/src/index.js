@@ -12,7 +12,8 @@ async function main() {
   console.log("═══════════════════════════════════════════════════════\n");
 
   const provider = createProvider();
-  const wallet   = new ethers.Wallet(ORACLE_KEY, provider);
+  const baseWallet = new ethers.Wallet(ORACLE_KEY, provider);
+  const wallet   = new ethers.NonceManager(baseWallet);
   const contract = new ethers.Contract(ORACLE_ADDR, ORACLE_ABI, wallet);
 
   console.log(`[Oracle]   Operator address : ${wallet.address}`);
