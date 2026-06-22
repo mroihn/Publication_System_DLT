@@ -13,16 +13,17 @@ type ManuscriptReader interface {
 }
 
 type ManuscriptSummary struct {
-	MsId            uint64    `json:"ms_id"`
-	CID             string    `json:"cid"`
-	Status          string    `json:"status"`
-	Version         int       `json:"version"`
-	AuthorAddress   string    `json:"author_address"`
-	PlagiarismScore *int      `json:"plagiarism_score"`
-	SubmitTxHash    string    `json:"submit_tx_hash"`
-	SubmitBlock     int64     `json:"submit_block"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	MsId            uint64     `json:"ms_id"`
+	CID             string     `json:"cid"`
+	Status          string     `json:"status"`
+	Version         int        `json:"version"`
+	AuthorAddress   string     `json:"author_address"`
+	PlagiarismScore *int       `json:"plagiarism_score"`
+	SubmitTxHash    string     `json:"submit_tx_hash"`
+	SubmitBlock     int64      `json:"submit_block"`
+	SubmitTimestamp *time.Time `json:"submit_timestamp"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type ManuscriptReviewer struct {
@@ -90,7 +91,8 @@ func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]Manus
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT ms_id, COALESCE(cid,''), COALESCE(status,''), version,
 		       COALESCE(author_address,''), plagiarism_score,
-		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0), created_at, updated_at
+		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
+		       submit_timestamp, created_at, updated_at
 		FROM manuscripts ORDER BY ms_id DESC
 	`)
 	if err != nil {
@@ -104,7 +106,8 @@ func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]Manus
 		if err := rows.Scan(
 			&ms.MsId, &ms.CID, &ms.Status, &ms.Version,
 			&ms.AuthorAddress, &ms.PlagiarismScore,
-			&ms.SubmitTxHash, &ms.SubmitBlock, &ms.CreatedAt, &ms.UpdatedAt,
+			&ms.SubmitTxHash, &ms.SubmitBlock,
+			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -123,13 +126,15 @@ func (r *PostgresManuscriptReader) GetManuscriptByID(ctx context.Context, msId u
 		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
 		       COALESCE(author_address,''), plagiarism_score, doi, doi_token_id,
 		       accept_count, reject_count, revise_count,
-		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0), created_at, updated_at
+		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
+		       submit_timestamp, created_at, updated_at
 		FROM manuscripts WHERE ms_id = $1
 	`, msId).Scan(
 		&d.MsId, &d.CID, &d.Metadata, &d.Status, &d.Version,
 		&d.AuthorAddress, &d.PlagiarismScore, &d.DOI, &d.DOITokenID,
 		&d.AcceptCount, &d.RejectCount, &d.ReviseCount,
-		&d.SubmitTxHash, &d.SubmitBlock, &d.CreatedAt, &d.UpdatedAt,
+		&d.SubmitTxHash, &d.SubmitBlock,
+		&d.SubmitTimestamp, &d.CreatedAt, &d.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

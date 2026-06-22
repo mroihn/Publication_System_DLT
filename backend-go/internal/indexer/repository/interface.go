@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 type IndexerRepository interface {
@@ -37,6 +38,7 @@ type ManuscriptRow struct {
 	Version       uint64
 	TxHash        string
 	BlockNumber   uint64
+	SubmittedAt   *time.Time // on-chain block timestamp; nil for pre-fix historical events
 }
 
 type ReviewRow struct {

@@ -1,0 +1,1 @@
+ALTER TABLE manuscripts ADD COLUMN IF NOT EXISTS submit_timestamp TIMESTAMPTZ;

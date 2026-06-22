@@ -14,6 +14,7 @@ type BlockchainClient interface {
 	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error)
 	SubscribeLogs(ctx context.Context, query ethereum.FilterQuery, ch chan<- types.Log) (ethereum.Subscription, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
+	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
 	BlockNumber(ctx context.Context) (uint64, error)
 	TransactionByHash(ctx context.Context, hash common.Hash) (*types.Transaction, bool, error)
 	Close()
@@ -41,6 +42,10 @@ func (a *EthClientAdapter) SubscribeLogs(ctx context.Context, query ethereum.Fil
 
 func (a *EthClientAdapter) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
 	return a.client.HeaderByNumber(ctx, number)
+}
+
+func (a *EthClientAdapter) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	return a.client.HeaderByHash(ctx, hash)
 }
 
 func (a *EthClientAdapter) BlockNumber(ctx context.Context) (uint64, error) {

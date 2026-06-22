@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 
-	idxrepo "github.com/mroihn/ta-proj/backend-go/internal/indexer/repository"
+	"github.com/mroihn/ta-proj/backend-go/internal/indexer/blockchain"
 	"github.com/mroihn/ta-proj/backend-go/internal/indexer/parser"
+	idxrepo "github.com/mroihn/ta-proj/backend-go/internal/indexer/repository"
 )
 
 type EventHandler interface {
@@ -13,9 +14,9 @@ type EventHandler interface {
 	Handle(ctx context.Context, tx *sql.Tx, event *parser.ParsedEvent) error
 }
 
-func BuildHandlerMap(repo idxrepo.IndexerRepository) map[string]EventHandler {
+func BuildHandlerMap(repo idxrepo.IndexerRepository, client blockchain.BlockchainClient) map[string]EventHandler {
 	handlers := []EventHandler{
-		&ManuscriptSubmittedHandler{repo: repo},
+		&ManuscriptSubmittedHandler{repo: repo, client: client},
 		&DecisionMadeHandler{repo: repo},
 		&ReviewSubmittedHandler{repo: repo},
 		&ReviewersAssignedHandler{repo: repo},

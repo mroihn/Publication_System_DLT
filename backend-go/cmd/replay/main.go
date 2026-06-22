@@ -56,7 +56,7 @@ func main() {
 	}
 
 	repo := idxrepo.NewPostgresIndexerRepository(db)
-	handlers := idxhandler.BuildHandlerMap(repo)
+	handlers := idxhandler.BuildHandlerMap(repo, ethClient)
 	idx := indexer.New(ethClient, evtParser, handlers, repo, db, indexer.Config{
 		RegistryAddress: cfg.RegistryContractAddress,
 		OracleAddress:   cfg.ReviewOracleContractAddress,

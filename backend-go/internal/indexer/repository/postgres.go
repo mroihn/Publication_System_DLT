@@ -56,10 +56,10 @@ func (r *PostgresIndexerRepository) SaveLastBlock(ctx context.Context, tx *sql.T
 
 func (r *PostgresIndexerRepository) UpsertManuscript(ctx context.Context, tx *sql.Tx, ms ManuscriptRow) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO manuscripts (ms_id, author_address, cid, metadata, status, version, submit_tx_hash, submit_block, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+		`INSERT INTO manuscripts (ms_id, author_address, cid, metadata, status, version, submit_tx_hash, submit_block, submit_timestamp, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 		 ON CONFLICT (ms_id) DO NOTHING`,
-		ms.MsId, ms.AuthorAddress, ms.CID, ms.Metadata, ms.Status, ms.Version, ms.TxHash, ms.BlockNumber,
+		ms.MsId, ms.AuthorAddress, ms.CID, ms.Metadata, ms.Status, ms.Version, ms.TxHash, ms.BlockNumber, ms.SubmittedAt,
 	)
 	return err
 }

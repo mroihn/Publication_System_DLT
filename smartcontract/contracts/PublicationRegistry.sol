@@ -132,7 +132,7 @@ contract PublicationRegistry is
     error TransferFailed();
     error ZeroAddress();
 
-    event ManuscriptSubmitted(uint256 indexed msId, string cid);
+    event ManuscriptSubmitted(uint256 indexed msId, address indexed author, string cid);
     event DecisionMade(uint256 indexed msId, Status decision);
     event IncentivePaid(address indexed reviewer, uint256 amount);
     event ManuscriptRevised(uint256 indexed msId, string newCid, uint256 version);
@@ -179,7 +179,7 @@ contract PublicationRegistry is
         ms.status = Status.CHECKING;
         ms.version = 1;
 
-        emit ManuscriptSubmitted(msId, cid);
+        emit ManuscriptSubmitted(msId, msg.sender, cid);
 
         reviewOracle.requestPlagiarismCheck(msId, cid);
     }
