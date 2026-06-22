@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mroihn/ta-proj/backend-go/internal/repository"
 )
 
@@ -13,6 +14,7 @@ type StorageService interface {
 
 type ContractService interface {
 	SubmitManuscript(cid, title string) (string, error)
+	SubmitReview(msId uint64, commentsHash [32]byte, verdict uint8) (string, error)
 }
 
 type ManuscriptUseCase struct {
@@ -58,4 +60,11 @@ func (uc *ManuscriptUseCase) GetByID(ctx context.Context, msId uint64) (*reposit
 		return nil, nil
 	}
 	return uc.reader.GetManuscriptByID(ctx, msId)
+}
+
+func (uc *ManuscriptUseCase) SubmitReview(msId uint64, comments string, verdict uint8) (string, error) {
+	hash := crypto.Keccak256Hash([]byte(comments))
+	var b32 [32]byte
+	copy(b32[:], hash.Bytes())
+	return uc.contract.SubmitReview(msId, b32, verdict)
 }

@@ -134,6 +134,7 @@ func main() {
 			manuscripts.GET("", manuscriptHandler.List)
 			manuscripts.GET("/:id", manuscriptHandler.GetByID)
 			manuscripts.POST("/upload", manuscriptHandler.Upload)
+			manuscripts.POST("/:id/reviews", manuscriptHandler.SubmitReview)
 		}
 	}
 

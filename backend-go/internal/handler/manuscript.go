@@ -44,6 +44,40 @@ func (h *ManuscriptHandler) GetByID(c *gin.Context) {
 	c.JSON(http.StatusOK, detail)
 }
 
+type submitReviewRequest struct {
+	Verdict  int    `json:"verdict"`
+	Comments string `json:"comments"`
+}
+
+func (h *ManuscriptHandler) SubmitReview(c *gin.Context) {
+	msId, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid manuscript id"})
+		return
+	}
+
+	var req submitReviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if req.Verdict < 0 || req.Verdict > 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "verdict must be 0 (ACCEPT), 1 (REJECT), or 2 (REVISE)"})
+		return
+	}
+	if req.Comments == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "comments are required"})
+		return
+	}
+
+	txHash, err := h.manuscriptUC.SubmitReview(msId, req.Comments, uint8(req.Verdict))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tx_hash": txHash})
+}
+
 func (h *ManuscriptHandler) Upload(c *gin.Context) {
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
