@@ -44,7 +44,7 @@ export default function ProfilePage() {
         throw new Error('MetaMask is not installed. Please install it to proceed.');
       }
 
-      const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+      const accounts = await ethereum.request({ method: 'eth_requestAccounts' }) as string[];
       const walletAddress = accounts[0];
 
       if (!walletAddress) {

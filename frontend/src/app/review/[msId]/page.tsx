@@ -15,6 +15,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { apiClient } from "@/core/services/api.client";
+import { getWalletClient, getNonce, DOMAIN } from "@/core/services/wallet";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -133,6 +134,8 @@ export default function ReviewManuscriptPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  const [signing, setSigning] = useState(false);
+
   // Pending / confirmed state
   const [pendingTxHash, setPendingTxHash] = useState<string | null>(null);
   const [indexed, setIndexed] = useState(false);
@@ -184,17 +187,43 @@ export default function ReviewManuscriptPage() {
     reviewCountAtSubmit.current = ms?.reviews.length ?? 0;
 
     try {
+      // Sign the review with MetaMask before relaying to backend
+      setSigning(true);
+      const { client, account } = await getWalletClient();
+      const nonce = await getNonce(account);
+      const signature = await client.signTypedData({
+        domain: DOMAIN,
+        types: {
+          SubmitReview: [
+            { name: "msId", type: "uint256" },
+            { name: "comments", type: "string" },
+            { name: "verdict", type: "uint8" },
+            { name: "nonce", type: "uint256" },
+          ],
+        },
+        primaryType: "SubmitReview",
+        message: { msId: BigInt(msId), comments, verdict: verdict as number, nonce },
+        account,
+      });
+      setSigning(false);
+
       const res = await apiClient.post<{ tx_hash: string }>(
         `/manuscripts/${msId}/reviews`,
-        { verdict, comments }
+        { verdict, comments, signature, nonce: nonce.toString() }
       );
       setPendingTxHash(res.data.tx_hash);
       startPolling(reviewCountAtSubmit.current + 1);
     } catch (err: unknown) {
       const msg =
+        (err as { message?: string })?.message ??
         (err as { response?: { data?: { message?: string } } })?.response?.data
           ?.message ?? "Submission failed. Please try again.";
-      setSubmitError(msg);
+      if (msg.includes("User rejected") || msg.includes("user rejected")) {
+        setSubmitError("Signature cancelled.");
+      } else {
+        setSubmitError(msg);
+      }
+      setSigning(false);
     } finally {
       setSubmitting(false);
     }
@@ -448,19 +477,20 @@ export default function ReviewManuscriptPage() {
           {/* Submit */}
           <div className="flex items-center justify-between gap-4">
             <p className="text-xs text-gray-400">
-              Submission is relayed on-chain by the platform wallet and requires your assigned reviewer role.
+              You will sign the review in MetaMask. The platform relayer submits it on-chain — no gas required from you.
             </p>
             <button
               type="submit"
-              disabled={submitting || verdict === null || comments.trim() === "" || notUnderReview}
+              disabled={submitting || signing || verdict === null || comments.trim() === "" || notUnderReview}
               className="flex-shrink-0 inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
             >
-              {submitting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+              {signing ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /><span>Sign in MetaMask…</span></>
+              ) : submitting ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /><span>Submitting…</span></>
               ) : (
-                <Send className="w-4 h-4" />
+                <><Send className="w-4 h-4" /><span>Submit Review</span></>
               )}
-              {submitting ? "Submitting…" : "Submit Review"}
             </button>
           </div>
         </form>

@@ -23,8 +23,8 @@ const (
 	zeroAddress = "0x0000000000000000000000000000000000000000"
 
 	registryABIJSON = `[
-		{"inputs":[{"name":"cid","type":"string"},{"name":"metadata","type":"string"}],"name":"submitManuscript","outputs":[],"stateMutability":"nonpayable","type":"function"},
-		{"inputs":[{"name":"msId","type":"uint256"},{"name":"reviewCid","type":"string"},{"name":"verdict","type":"uint8"}],"name":"submitReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
+		{"inputs":[{"name":"cid","type":"string"},{"name":"metadata","type":"string"},{"name":"nonce","type":"uint256"},{"name":"v","type":"uint8"},{"name":"r","type":"bytes32"},{"name":"s","type":"bytes32"}],"name":"submitManuscript","outputs":[{"name":"","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},
+		{"inputs":[{"name":"msId","type":"uint256"},{"name":"reviewCid","type":"string"},{"name":"verdict","type":"uint8"},{"name":"comments","type":"string"},{"name":"nonce","type":"uint256"},{"name":"v","type":"uint8"},{"name":"r","type":"bytes32"},{"name":"s","type":"bytes32"}],"name":"submitReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
 
 		{"type":"error","name":"InvalidState","inputs":[{"name":"msId","type":"uint256"},{"name":"expected","type":"uint8"},{"name":"actual","type":"uint8"}]},
 		{"type":"error","name":"NotAuthor","inputs":[{"name":"msId","type":"uint256"},{"name":"caller","type":"address"}]},
@@ -33,6 +33,7 @@ const (
 		{"type":"error","name":"InsufficientAllowance","inputs":[{"name":"required","type":"uint256"},{"name":"actual","type":"uint256"}]},
 		{"type":"error","name":"ManuscriptNotFound","inputs":[{"name":"msId","type":"uint256"}]},
 		{"type":"error","name":"PlagiarismThresholdExceeded","inputs":[{"name":"msId","type":"uint256"},{"name":"score","type":"uint256"}]},
+		{"type":"error","name":"InvalidSignature","inputs":[]},
 		{"type":"error","name":"TransferFailed","inputs":[]},
 		{"type":"error","name":"ZeroAddress","inputs":[]}
 	]`
@@ -58,6 +59,21 @@ func NewEthereumService(rpcURL, privateKeyHex, contractAddress string) *Ethereum
 		privateKey:      key,
 		contractAddress: contractAddress,
 	}
+}
+
+// splitSig splits a 65-byte hex signature (0x<r32><s32><v1>) into its components.
+func splitSig(hexSig string) (v uint8, r [32]byte, s [32]byte, err error) {
+	b := common.FromHex(hexSig)
+	if len(b) != 65 {
+		return 0, [32]byte{}, [32]byte{}, fmt.Errorf("invalid signature length: %d bytes (expected 65)", len(b))
+	}
+	copy(r[:], b[0:32])
+	copy(s[:], b[32:64])
+	v = b[64]
+	if v < 27 {
+		v += 27 // normalize EIP-155 v=0/1 → 27/28
+	}
+	return
 }
 
 func (s *EthereumService) sendTx(methodName string, args ...any) (string, error) {
@@ -207,11 +223,26 @@ func decodeCustomError(payload []byte) string {
 	return ""
 }
 
-func (s *EthereumService) SubmitManuscript(cid, title string) (string, error) {
+func (s *EthereumService) SubmitManuscript(cid, title, signature string, nonce uint64) (string, error) {
+	v, r, sv, err := splitSig(signature)
+	if err != nil {
+		return "", fmt.Errorf("split signature: %w", err)
+	}
 	metadata, _ := json.Marshal(map[string]string{"title": title})
-	return s.sendTx("submitManuscript", cid, string(metadata))
+	return s.sendTx("submitManuscript", cid, string(metadata), new(big.Int).SetUint64(nonce), v, r, sv)
 }
 
-func (s *EthereumService) SubmitReview(msId uint64, reviewCid string, verdict uint8) (string, error) {
-	return s.sendTx("submitReview", new(big.Int).SetUint64(msId), reviewCid, verdict)
+func (s *EthereumService) SubmitReview(msId uint64, reviewCid, comments, signature string, nonce uint64, verdict uint8) (string, error) {
+	v, r, sv, err := splitSig(signature)
+	if err != nil {
+		return "", fmt.Errorf("split signature: %w", err)
+	}
+	return s.sendTx("submitReview",
+		new(big.Int).SetUint64(msId),
+		reviewCid,
+		verdict,
+		comments,
+		new(big.Int).SetUint64(nonce),
+		v, r, sv,
+	)
 }

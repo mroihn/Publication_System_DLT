@@ -16,6 +16,7 @@ module.exports = {
         enabled: true,
         runs: 200,
       },
+      viaIR: true,
       evmVersion: "cancun", // Required for OZ 5.1.0 mcopy; Polygon Amoy supports Cancun
     },
   },

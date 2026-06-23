@@ -1,21 +1,23 @@
 "use client";
 
 import { useState } from "react";
-import { UploadCloud, FileText, Send } from "lucide-react";
+import { UploadCloud, FileText, Send, PenLine } from "lucide-react";
 import { useAuth } from "@/core/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/core/context/ToastContext";
 import { apiClient } from "@/core/services/api.client";
+import { getWalletClient, getNonce, DOMAIN } from "@/core/services/wallet";
 
 export default function SubmitManuscriptPage() {
   const { isAuthenticated: isConnected, isLoading } = useAuth();
   const router = useRouter();
   const { addToast } = useToast();
-  
+
   const [title, setTitle] = useState("");
   const [abstract, setAbstract] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [step, setStep] = useState<"form" | "uploading" | "signing" | "submitting">("form");
 
   if (isLoading) {
     return (
@@ -31,7 +33,7 @@ export default function SubmitManuscriptPage() {
         <div className="text-center space-y-4 max-w-md bg-white p-8 rounded-xl shadow-sm border border-gray-200">
           <h2 className="text-2xl font-bold text-gray-900">Authentication Required</h2>
           <p className="text-gray-600">Please login to your account to submit a manuscript.</p>
-          <button 
+          <button
             onClick={() => router.push("/login")}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
           >
@@ -42,25 +44,72 @@ export default function SubmitManuscriptPage() {
     );
   }
 
+  const stepLabel: Record<typeof step, string> = {
+    form: "Submit to Network",
+    uploading: "Uploading to IPFS…",
+    signing: "Sign in MetaMask…",
+    submitting: "Submitting on-chain…",
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) return addToast("Please select a file to upload.", "error");
 
     setIsSubmitting(true);
     try {
+      // Step 1: upload file to IPFS, receive CID
+      setStep("uploading");
       const formData = new FormData();
-      formData.append("title", title);
-      formData.append("abstract", abstract);
       formData.append("file", file);
+      const uploadRes = await apiClient.post<{ cid: string }>(
+        "/manuscripts/upload/file",
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      );
+      const cid = uploadRes.data.cid;
 
-      await apiClient.post('/manuscripts/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+      // Step 2: sign the CID + metadata with MetaMask (EIP-712)
+      setStep("signing");
+      const { client, account } = await getWalletClient();
+      const nonce = await getNonce(account);
+      const metadata = JSON.stringify({ title, abstract });
+
+      const signature = await client.signTypedData({
+        domain: DOMAIN,
+        types: {
+          SubmitManuscript: [
+            { name: "cid", type: "string" },
+            { name: "metadata", type: "string" },
+            { name: "nonce", type: "uint256" },
+          ],
+        },
+        primaryType: "SubmitManuscript",
+        message: { cid, metadata, nonce },
+        account,
       });
 
-      addToast("Manuscript successfully uploaded and submitted to the smart contract!", "success");
+      // Step 3: submit signed data to backend → contract
+      setStep("submitting");
+      await apiClient.post("/manuscripts/submit", {
+        cid,
+        title,
+        signature,
+        nonce: nonce.toString(),
+      });
+
+      addToast("Manuscript submitted to the blockchain!", "success");
       router.push("/tracker");
-    } catch {
-      addToast("Submission failed. Please try again.", "error");
+    } catch (err: unknown) {
+      const msg =
+        (err as { message?: string })?.message ??
+        "Submission failed. Please try again.";
+      // User cancelled MetaMask signing
+      if (msg.includes("User rejected") || msg.includes("user rejected")) {
+        addToast("Signature cancelled.", "error");
+      } else {
+        addToast(msg, "error");
+      }
+      setStep("form");
     } finally {
       setIsSubmitting(false);
     }
@@ -75,6 +124,10 @@ export default function SubmitManuscriptPage() {
         </h1>
         <p className="text-gray-600 mt-2 text-lg">
           Upload your academic work to the decentralized network and initiate the peer review process.
+        </p>
+        <p className="text-gray-500 text-sm mt-1 flex items-center gap-1">
+          <PenLine className="w-4 h-4" />
+          Your MetaMask wallet will sign the submission — no gas required from you.
         </p>
       </div>
 
@@ -123,6 +176,17 @@ export default function SubmitManuscriptPage() {
           </label>
         </div>
 
+        {isSubmitting && step !== "form" && (
+          <div className="flex items-center gap-3 p-4 bg-indigo-50 rounded-xl border border-indigo-200 text-sm text-indigo-800">
+            <div className="w-4 h-4 border-2 border-indigo-400 border-t-indigo-800 rounded-full animate-spin flex-shrink-0" />
+            <span>
+              {step === "uploading" && "Uploading file to IPFS…"}
+              {step === "signing" && "Waiting for MetaMask signature…"}
+              {step === "submitting" && "Submitting to the blockchain…"}
+            </span>
+          </div>
+        )}
+
         <div className="pt-6 border-t border-gray-200 flex justify-end">
           <button
             type="submit"
@@ -134,7 +198,7 @@ export default function SubmitManuscriptPage() {
             ) : (
               <Send className="w-5 h-5" />
             )}
-            <span>{isSubmitting ? "Submitting..." : "Submit to Network"}</span>
+            <span>{stepLabel[step]}</span>
           </button>
         </div>
       </form>

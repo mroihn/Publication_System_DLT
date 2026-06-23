@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IDOIToken {
@@ -68,10 +70,11 @@ library DOILib {
 contract PublicationRegistry is
     Initializable,
     UUPSUpgradeable,
-    AccessControlUpgradeable
+    AccessControlUpgradeable,
+    EIP712Upgradeable
 {
     using DOILib for uint256;
-   
+
     enum Status {
         SUBMITTED,           // 0 — initial state
         CHECKING,            // 1 — plagiarism check in progress
@@ -91,8 +94,8 @@ contract PublicationRegistry is
     struct Manuscript {
         uint256 id;
         address author;
-        string cid;          
-        string metadata;     
+        string cid;
+        string metadata;
         Status status;
         uint256 version;
         uint256 plagiarismScore;
@@ -100,7 +103,7 @@ contract PublicationRegistry is
         uint256 acceptCount;
         uint256 rejectCount;
         uint256 reviseCount;
-        uint256 reviewCount; 
+        uint256 reviewCount;
         string doi;
     }
 
@@ -108,6 +111,18 @@ contract PublicationRegistry is
     bytes32 public constant RESEARCHER_ROLE = keccak256("RESEARCHER_ROLE");
     bytes32 public constant REVIEWER_ROLE = keccak256("REVIEWER_ROLE");
     bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
+    bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+
+    // EIP-712 type hashes
+    bytes32 private constant SUBMIT_MANUSCRIPT_TYPEHASH = keccak256(
+        "SubmitManuscript(string cid,string metadata,uint256 nonce)"
+    );
+    bytes32 private constant REVISE_MANUSCRIPT_TYPEHASH = keccak256(
+        "ReviseManuscript(uint256 msId,string newCid,uint256 nonce)"
+    );
+    bytes32 private constant SUBMIT_REVIEW_TYPEHASH = keccak256(
+        "SubmitReview(uint256 msId,string comments,uint8 verdict,uint256 nonce)"
+    );
 
     uint256 public constant PLAGIARISM_THRESHOLD = 30;
     uint256 public constant PUBLICATION_FEE = 100 * 1e18;
@@ -121,6 +136,7 @@ contract PublicationRegistry is
     mapping(uint256 => Manuscript) private _manuscripts;
     mapping(uint256 => mapping(address => bool)) public hasReviewed;
     mapping(uint256 => mapping(address => string)) public reviewHashes;
+    mapping(address => uint256) public nonces;
 
     error InvalidState(uint256 msId, Status expected, Status actual);
     error NotAuthor(uint256 msId, address caller);
@@ -131,6 +147,7 @@ contract PublicationRegistry is
     error PlagiarismThresholdExceeded(uint256 msId, uint256 score);
     error TransferFailed();
     error ZeroAddress();
+    error InvalidSignature();
 
     event ManuscriptSubmitted(uint256 indexed msId, address indexed author, string cid);
     event DecisionMade(uint256 indexed msId, Status decision);
@@ -145,6 +162,7 @@ contract PublicationRegistry is
     constructor() {
         _disableInitializers();
     }
+
     function initialize(
         address _doiToken,
         address _journalToken,
@@ -155,6 +173,7 @@ contract PublicationRegistry is
             revert ZeroAddress();
 
         __AccessControl_init();
+        __EIP712_init("PublicationRegistry", "1");
 
         doiToken = IDOIToken(_doiToken);
         journalToken = IERC20(_journalToken);
@@ -165,22 +184,46 @@ contract PublicationRegistry is
         _grantRole(ORACLE_ROLE, _reviewOracle);
     }
 
+    // Returns hardcoded name to avoid needing __EIP712_init on upgrade
+    function _EIP712Name() internal pure override returns (string memory) {
+        return "PublicationRegistry";
+    }
+
+    function _EIP712Version() internal pure override returns (string memory) {
+        return "1";
+    }
+
+    function domainSeparator() external view returns (bytes32) {
+        return _domainSeparatorV4();
+    }
+
     function submitManuscript(
         string calldata cid,
-        string calldata metadata
-    ) external onlyRole(RESEARCHER_ROLE) returns (uint256 msId) {
-        msId = nextManuscriptId++;
+        string calldata metadata,
+        uint256 nonce,
+        uint8 v, bytes32 r, bytes32 s
+    ) external onlyRole(OPERATOR_ROLE) returns (uint256 msId) {
+        bytes32 structHash = keccak256(abi.encode(
+            SUBMIT_MANUSCRIPT_TYPEHASH,
+            keccak256(bytes(cid)),
+            keccak256(bytes(metadata)),
+            nonce
+        ));
+        address actualAuthor = ECDSA.recover(_hashTypedDataV4(structHash), v, r, s);
+        if (actualAuthor == address(0)) revert InvalidSignature();
+        if (nonces[actualAuthor] != nonce) revert InvalidSignature();
+        unchecked { nonces[actualAuthor]++; }
 
+        msId = nextManuscriptId++;
         Manuscript storage ms = _manuscripts[msId];
         ms.id = msId;
-        ms.author = msg.sender;
+        ms.author = actualAuthor;
         ms.cid = cid;
         ms.metadata = metadata;
         ms.status = Status.CHECKING;
         ms.version = 1;
 
-        emit ManuscriptSubmitted(msId, msg.sender, cid);
-
+        emit ManuscriptSubmitted(msId, actualAuthor, cid);
         reviewOracle.requestPlagiarismCheck(msId, cid);
     }
 
@@ -217,29 +260,46 @@ contract PublicationRegistry is
         emit ReviewersAssigned(msId, reviewers);
     }
 
+    // Caller must have OPERATOR_ROLE. Actual reviewer is recovered from the EIP-712 signature.
+    // The user signs (msId, comments, verdict, nonce); the backend uploads comments to IPFS
+    // and passes the resulting reviewCid separately — not covered by the signature.
     function submitReview(
         uint256 msId,
         string calldata reviewCid,
-        Verdict verdict
-    ) external onlyRole(REVIEWER_ROLE) {
-        Manuscript storage ms = _manuscripts[msId];
+        Verdict verdict,
+        string calldata comments,
+        uint256 nonce,
+        uint8 v, bytes32 r, bytes32 s
+    ) external onlyRole(OPERATOR_ROLE) {
+        bytes32 structHash = keccak256(abi.encode(
+            SUBMIT_REVIEW_TYPEHASH,
+            msId,
+            keccak256(bytes(comments)),
+            uint8(verdict),
+            nonce
+        ));
+        address actualReviewer = ECDSA.recover(_hashTypedDataV4(structHash), v, r, s);
+        if (actualReviewer == address(0)) revert InvalidSignature();
+        if (!hasRole(REVIEWER_ROLE, actualReviewer)) revert NotAssignedReviewer(msId, actualReviewer);
+        if (nonces[actualReviewer] != nonce) revert InvalidSignature();
+        unchecked { nonces[actualReviewer]++; }
+
         _requireState(msId, Status.UNDER_REVIEW);
+        if (!_isAssignedReviewer(msId, actualReviewer))
+            revert NotAssignedReviewer(msId, actualReviewer);
+        if (hasReviewed[msId][actualReviewer])
+            revert AlreadyReviewed(msId, actualReviewer);
 
-        if (!_isAssignedReviewer(msId, msg.sender))
-            revert NotAssignedReviewer(msId, msg.sender);
-
-        if (hasReviewed[msId][msg.sender])
-            revert AlreadyReviewed(msId, msg.sender);
-
-        hasReviewed[msId][msg.sender] = true;
-        reviewHashes[msId][msg.sender] = reviewCid;
+        hasReviewed[msId][actualReviewer] = true;
+        reviewHashes[msId][actualReviewer] = reviewCid;
+        Manuscript storage ms = _manuscripts[msId];
         ms.reviewCount++;
 
         if (verdict == Verdict.ACCEPT) ms.acceptCount++;
         else if (verdict == Verdict.REJECT) ms.rejectCount++;
         else ms.reviseCount++;
 
-        emit ReviewSubmitted(msId, msg.sender, verdict, reviewCid);
+        emit ReviewSubmitted(msId, actualReviewer, verdict, reviewCid);
 
         if (ms.reviewCount == ms.reviewers.length) {
             _evaluateDecision(msId);
@@ -248,12 +308,24 @@ contract PublicationRegistry is
 
     function reviseManuscript(
         uint256 msId,
-        string calldata newCid
-    ) external onlyRole(RESEARCHER_ROLE) {
-        Manuscript storage ms = _manuscripts[msId];
-        _requireState(msId, Status.REVISION_REQUESTED);
-        _requireAuthor(msId);
+        string calldata newCid,
+        uint256 nonce,
+        uint8 v, bytes32 r, bytes32 s
+    ) external onlyRole(OPERATOR_ROLE) {
+        bytes32 structHash = keccak256(abi.encode(
+            REVISE_MANUSCRIPT_TYPEHASH,
+            msId,
+            keccak256(bytes(newCid)),
+            nonce
+        ));
+        address signer = ECDSA.recover(_hashTypedDataV4(structHash), v, r, s);
+        if (signer == address(0)) revert InvalidSignature();
+        if (_manuscripts[msId].author != signer) revert NotAuthor(msId, signer);
+        if (nonces[signer] != nonce) revert InvalidSignature();
+        unchecked { nonces[signer]++; }
 
+        _requireState(msId, Status.REVISION_REQUESTED);
+        Manuscript storage ms = _manuscripts[msId];
         ms.cid = newCid;
         ms.version++;
         ms.status = Status.CHECKING;
@@ -261,14 +333,15 @@ contract PublicationRegistry is
         _resetReviewState(msId);
 
         emit ManuscriptRevised(msId, newCid, ms.version);
-
         reviewOracle.requestPlagiarismCheck(msId, newCid);
     }
 
+    // payPublicationFee is called directly by the author's wallet (no relayer needed).
+    // RESEARCHER_ROLE check removed — _requireAuthor is sufficient since ms.author is now
+    // the user's wallet address (set by ecrecover in submitManuscript).
     function payPublicationFee(
         uint256 msId
-    ) external onlyRole(RESEARCHER_ROLE) {
-        Manuscript storage ms = _manuscripts[msId];
+    ) external {
         _requireState(msId, Status.ACCEPTED);
         _requireAuthor(msId);
 
@@ -284,13 +357,14 @@ contract PublicationRegistry is
         );
         if (!success) revert TransferFailed();
 
-        address[] memory reviewers = ms.reviewers;
+        address[] memory reviewers = _manuscripts[msId].reviewers;
         for (uint256 i = 0; i < reviewers.length; i++) {
             bool paid = journalToken.transfer(reviewers[i], REVIEWER_INCENTIVE);
             if (!paid) revert TransferFailed();
             emit IncentivePaid(reviewers[i], REVIEWER_INCENTIVE);
         }
 
+        Manuscript storage ms = _manuscripts[msId];
         string memory doi = DOILib.buildDOI(msId, ms.version);
         ms.doi = doi;
 
@@ -323,6 +397,12 @@ contract PublicationRegistry is
         grantRole(REVIEWER_ROLE, reviewer);
     }
 
+    function addOperator(
+        address operator
+    ) external onlyRole(ADMIN_ROLE) {
+        grantRole(OPERATOR_ROLE, operator);
+    }
+
     function getManuscript(
         uint256 msId
     ) external view returns (Manuscript memory) {
@@ -344,7 +424,7 @@ contract PublicationRegistry is
 
     function _evaluateDecision(uint256 msId) internal {
         Manuscript storage ms = _manuscripts[msId];
-        uint256 majority = (ms.reviewers.length / 2) + 1; // e.g. 2 for 3 reviewers
+        uint256 majority = (ms.reviewers.length / 2) + 1;
 
         if (ms.acceptCount >= majority) {
             ms.status = Status.ACCEPTED;
@@ -370,7 +450,6 @@ contract PublicationRegistry is
             delete reviewHashes[msId][ms.reviewers[i]];
         }
 
-        // Reset counters
         ms.acceptCount = 0;
         ms.rejectCount = 0;
         ms.reviseCount = 0;

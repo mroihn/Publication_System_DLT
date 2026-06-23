@@ -13,8 +13,8 @@ type StorageService interface {
 }
 
 type ContractService interface {
-	SubmitManuscript(cid, title string) (string, error)
-	SubmitReview(msId uint64, reviewCid string, verdict uint8) (string, error)
+	SubmitManuscript(cid, title, signature string, nonce uint64) (string, error)
+	SubmitReview(msId uint64, reviewCid, comments, signature string, nonce uint64, verdict uint8) (string, error)
 }
 
 type ManuscriptUseCase struct {
@@ -33,18 +33,20 @@ type SubmitResult struct {
 	Status string `json:"status"`
 }
 
-func (uc *ManuscriptUseCase) Submit(fileData []byte, filename, title string) (*SubmitResult, error) {
-	cid, err := uc.storage.UploadFile(fileData, filename)
+// UploadFile uploads raw file data to IPFS and returns the CID.
+// Used by the two-step submit flow: upload first, then sign, then submit.
+func (uc *ManuscriptUseCase) UploadFile(data []byte, filename string) (string, error) {
+	return uc.storage.UploadFile(data, filename)
+}
+
+// SubmitOnChain submits a pre-uploaded manuscript to the smart contract.
+// The caller must provide the IPFS CID, EIP-712 signature, and nonce.
+func (uc *ManuscriptUseCase) SubmitOnChain(cid, title, signature string, nonce uint64) (*SubmitResult, error) {
+	txHash, err := uc.contract.SubmitManuscript(cid, title, signature, nonce)
 	if err != nil {
 		return nil, err
 	}
-
-	txHash, err := uc.contract.SubmitManuscript(cid, title)
-	if err != nil {
-		return nil, err
-	}
-
-	fmt.Printf("Manuscript submitted with CID: %s and txHash: %s\n", cid, txHash)
+	fmt.Printf("Manuscript submitted: cid=%s txHash=%s\n", cid, txHash)
 	return &SubmitResult{CID: cid, TxHash: txHash, Status: "CHECKING"}, nil
 }
 
@@ -62,13 +64,15 @@ func (uc *ManuscriptUseCase) GetByID(ctx context.Context, msId uint64) (*reposit
 	return uc.reader.GetManuscriptByID(ctx, msId)
 }
 
-func (uc *ManuscriptUseCase) SubmitReview(msId uint64, comments string, verdict uint8) (string, error) {
+// SubmitReview uploads the review text to IPFS and submits the review on-chain.
+// The reviewer's identity is proven via the EIP-712 signature.
+func (uc *ManuscriptUseCase) SubmitReview(msId uint64, comments, signature string, nonce uint64, verdict uint8) (string, error) {
 	verdictStr := map[uint8]string{0: "ACCEPT", 1: "REJECT", 2: "REVISE"}[verdict]
 	payload, _ := json.Marshal(map[string]string{"comments": comments, "verdict": verdictStr})
 	cid, err := uc.storage.UploadFile(payload, fmt.Sprintf("review-ms%d.json", msId))
 	if err != nil {
 		return "", fmt.Errorf("upload review to IPFS: %w", err)
 	}
-	fmt.Printf("Manuscript review uploaded to IPFS: %s\n", cid)
-	return uc.contract.SubmitReview(msId, cid, verdict)
+	fmt.Printf("Review uploaded to IPFS: cid=%s ms=%d\n", cid, msId)
+	return uc.contract.SubmitReview(msId, cid, comments, signature, nonce, verdict)
 }

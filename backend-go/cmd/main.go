@@ -133,7 +133,8 @@ func main() {
 		{
 			manuscripts.GET("", manuscriptHandler.List)
 			manuscripts.GET("/:id", manuscriptHandler.GetByID)
-			manuscripts.POST("/upload", manuscriptHandler.Upload)
+			manuscripts.POST("/upload/file", manuscriptHandler.UploadFile)
+			manuscripts.POST("/submit", manuscriptHandler.Submit)
 			manuscripts.POST("/:id/reviews", manuscriptHandler.SubmitReview)
 		}
 	}

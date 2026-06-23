@@ -7,6 +7,9 @@ const { ethers, upgrades } = require("hardhat");
  * Tests use a MockReviewOracle that implements the IReviewOracle interface
  * as no-ops, allowing the test harness to call fulfillment functions
  * directly on PublicationRegistry to simulate the oracle callback flow.
+ *
+ * EIP-712 meta-tx pattern: the relayer (admin) calls the contract; the actual
+ * author/reviewer signs typed data off-chain. In tests, admin holds OPERATOR_ROLE.
  */
 describe("Publication System", function () {
   // Contracts
@@ -16,12 +19,13 @@ describe("Publication System", function () {
   let admin, researcher, reviewer1, reviewer2, reviewer3, outsider;
 
   // Role hashes
-  let RESEARCHER_ROLE, REVIEWER_ROLE, ORACLE_ROLE, ADMIN_ROLE, MINTER_ROLE;
+  let RESEARCHER_ROLE, REVIEWER_ROLE, ORACLE_ROLE, ADMIN_ROLE, MINTER_ROLE, OPERATOR_ROLE;
 
   // Commonly used constants
   const CID = "QmTestCID123456789abcdef";
   const METADATA = '{"title":"Test Paper","authors":["Alice"]}';
   const REVIEW_CID = "QmTestReviewCID";
+  const REVIEW_COMMENTS = "Thorough methodology. Recommend acceptance with minor edits.";
   const PUBLICATION_FEE = ethers.parseEther("100");
   const REVIEWER_INCENTIVE = ethers.parseEther("10");
 
@@ -36,11 +40,37 @@ describe("Publication System", function () {
     PUBLISHED: 6,
   };
 
-  // Verdict enum values
+  // Verdict enum values — must match Solidity: ACCEPT=0, REJECT=1, REVISE=2
   const Verdict = {
     ACCEPT: 0,
     REJECT: 1,
     REVISE: 2,
+  };
+
+  // EIP-712 type definitions
+  const SUBMIT_MS_TYPES = {
+    SubmitManuscript: [
+      { name: "cid", type: "string" },
+      { name: "metadata", type: "string" },
+      { name: "nonce", type: "uint256" },
+    ],
+  };
+
+  const SUBMIT_REVIEW_TYPES = {
+    SubmitReview: [
+      { name: "msId", type: "uint256" },
+      { name: "comments", type: "string" },
+      { name: "verdict", type: "uint8" },
+      { name: "nonce", type: "uint256" },
+    ],
+  };
+
+  const REVISE_TYPES = {
+    ReviseManuscript: [
+      { name: "msId", type: "uint256" },
+      { name: "newCid", type: "string" },
+      { name: "nonce", type: "uint256" },
+    ],
   };
 
   beforeEach(async function () {
@@ -48,13 +78,12 @@ describe("Publication System", function () {
       await ethers.getSigners();
 
     // Compute role hashes
-    RESEARCHER_ROLE = ethers.keccak256(
-      ethers.toUtf8Bytes("RESEARCHER_ROLE")
-    );
-    REVIEWER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("REVIEWER_ROLE"));
-    ORACLE_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ORACLE_ROLE"));
-    ADMIN_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ADMIN_ROLE"));
-    MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"));
+    RESEARCHER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("RESEARCHER_ROLE"));
+    REVIEWER_ROLE   = ethers.keccak256(ethers.toUtf8Bytes("REVIEWER_ROLE"));
+    ORACLE_ROLE     = ethers.keccak256(ethers.toUtf8Bytes("ORACLE_ROLE"));
+    ADMIN_ROLE      = ethers.keccak256(ethers.toUtf8Bytes("ADMIN_ROLE"));
+    MINTER_ROLE     = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"));
+    OPERATOR_ROLE   = ethers.keccak256(ethers.toUtf8Bytes("OPERATOR_ROLE"));
 
     // Deploy JournalToken with 1M initial supply
     const JournalToken = await ethers.getContractFactory("JournalToken");
@@ -67,13 +96,10 @@ describe("Publication System", function () {
     await doiToken.waitForDeployment();
 
     // Deploy PublicationRegistry via UUPS proxy
-    // For testing, we skip ReviewOracle deployment and use admin as the oracle
     const PublicationRegistry = await ethers.getContractFactory(
       "PublicationRegistry"
     );
 
-    // We need a placeholder oracle address — we'll use admin for direct callback testing
-    // First deploy the registry with admin as the oracle address
     registry = await upgrades.deployProxy(
       PublicationRegistry,
       [
@@ -92,7 +118,7 @@ describe("Publication System", function () {
     // Grant MINTER_ROLE on DOIToken to PublicationRegistry
     await doiToken.grantRole(MINTER_ROLE, await registry.getAddress());
 
-    // Grant roles
+    // Grant roles (RESEARCHER_ROLE kept for backward-compat role-assignment tests)
     await registry.grantRole(RESEARCHER_ROLE, researcher.address);
     await registry.grantRole(REVIEWER_ROLE, reviewer1.address);
     await registry.grantRole(REVIEWER_ROLE, reviewer2.address);
@@ -120,34 +146,26 @@ describe("Publication System", function () {
     });
 
     it("should deploy PublicationRegistry as UUPS proxy", async function () {
-      // Verify the proxy is functional
       const nextId = await registry.nextManuscriptId();
       expect(nextId).to.equal(0);
     });
 
     it("should have correct roles assigned", async function () {
       expect(await registry.hasRole(ADMIN_ROLE, admin.address)).to.be.true;
-      expect(await registry.hasRole(RESEARCHER_ROLE, researcher.address)).to.be
-        .true;
-      expect(await registry.hasRole(REVIEWER_ROLE, reviewer1.address)).to.be
-        .true;
+      expect(await registry.hasRole(RESEARCHER_ROLE, researcher.address)).to.be.true;
+      expect(await registry.hasRole(REVIEWER_ROLE, reviewer1.address)).to.be.true;
     });
   });
 
   // ─────────────────────── Manuscript Submission Tests ────────────────────────
 
   describe("Manuscript Submission", function () {
-    it("should revert if caller lacks RESEARCHER_ROLE", async function () {
+    it("should revert if caller lacks OPERATOR_ROLE", async function () {
+      // outsider has no OPERATOR_ROLE — use dummy sig values, fails at access control
       await expect(
-        registry.connect(outsider).submitManuscript(CID, METADATA)
+        registry.connect(outsider).submitManuscript(CID, METADATA, 0, 27, ethers.ZeroHash, ethers.ZeroHash)
       ).to.be.reverted;
     });
-
-    /**
-     * NOTE: submitManuscript calls reviewOracle.requestPlagiarismCheck(),
-     * which would revert since admin doesn't implement that interface.
-     * The state machine tests below use MockReviewOracle instead.
-     */
   });
 
   // ──────────────────── Full Lifecycle: Happy Path ───────────────────────────
@@ -156,50 +174,49 @@ describe("Publication System", function () {
     let msId;
 
     beforeEach(async function () {
-      // Manually create a manuscript by calling internal state setup
-      // Since submitManuscript would call the oracle, we simulate the state
-      // by using a modified approach:
-
-      // Grant ORACLE_ROLE to admin so we can simulate oracle callbacks
-      // (already done in setup since admin.address was used as oracle)
-
-      // We'll use a helper to simulate the submit + oracle callback flow
       msId = 0;
-
-      // Create manuscript directly in CHECKING state
-      // We need to submit without the oracle call, so let's set up a mock
-      // approach by modifying the registry to accept admin as oracle
-
-      // Actually, since the constructor sets admin as the reviewOracle address,
-      // calling submitManuscript would try to call admin.requestPlagiarismCheck
-      // which doesn't exist. So we test the state machine by manually
-      // managing state transitions.
     });
 
     it("should handle plagiarism check fulfillment — pass", async function () {
-      // Skip to testing fulfillPlagiarism directly
-      // First, manually set up a manuscript in CHECKING state
-      // We use a direct approach: since admin has ORACLE_ROLE, call fulfillPlagiarism
-
-      // Unfortunately we can't submit without the oracle, so let's test
-      // the individual state transitions that we CAN test
+      // Placeholder — full tests below in State Machine describe
     });
   });
 
   // ────────────── State Machine Tests (Direct Callbacks) ────────────────────
 
   describe("State Machine — Direct Oracle Simulation", function () {
-    /**
-     * Since submitManuscript requires a valid oracle contract,
-     * we deploy a MockReviewOracle that implements the interface
-     * but does nothing on requestPlagiarismCheck/requestRandomReviewers.
-     */
-
     let mockOracleRegistry;
+    let domain;
+
+    // Sign a submitManuscript request on behalf of signer
+    async function signMs(signer, cid, metadata) {
+      const nonce = await mockOracleRegistry.nonces(signer.address);
+      const raw = await signer.signTypedData(domain, SUBMIT_MS_TYPES, { cid, metadata, nonce });
+      const { v, r, s } = ethers.Signature.from(raw);
+      return { nonce, v, r, s };
+    }
+
+    // Sign a submitReview request on behalf of signer
+    async function signReview(signer, msId, comments, verdict) {
+      const nonce = await mockOracleRegistry.nonces(signer.address);
+      const raw = await signer.signTypedData(domain, SUBMIT_REVIEW_TYPES, {
+        msId: BigInt(msId), comments, verdict, nonce,
+      });
+      const { v, r, s } = ethers.Signature.from(raw);
+      return { nonce, v, r, s };
+    }
+
+    // Sign a reviseManuscript request on behalf of signer
+    async function signRevise(signer, msId, newCid) {
+      const nonce = await mockOracleRegistry.nonces(signer.address);
+      const raw = await signer.signTypedData(domain, REVISE_TYPES, {
+        msId: BigInt(msId), newCid, nonce,
+      });
+      const { v, r, s } = ethers.Signature.from(raw);
+      return { nonce, v, r, s };
+    }
 
     beforeEach(async function () {
-      // Deploy a fresh registry with a mock oracle approach
-      // We'll deploy a minimal mock oracle contract
       const MockOracle = await ethers.getContractFactory("MockReviewOracle");
       const mockOracle = await MockOracle.deploy();
       await mockOracle.waitForDeployment();
@@ -229,7 +246,7 @@ describe("Publication System", function () {
       );
 
       // Grant roles
-      await mockOracleRegistry.grantRole(RESEARCHER_ROLE, researcher.address);
+      await mockOracleRegistry.grantRole(OPERATOR_ROLE, admin.address);
       await mockOracleRegistry.grantRole(REVIEWER_ROLE, reviewer1.address);
       await mockOracleRegistry.grantRole(REVIEWER_ROLE, reviewer2.address);
       await mockOracleRegistry.grantRole(REVIEWER_ROLE, reviewer3.address);
@@ -239,12 +256,22 @@ describe("Publication System", function () {
 
       // Transfer JRT to researcher
       await journalToken.transfer(researcher.address, ethers.parseEther("500"));
+
+      // Build EIP-712 domain (uses the deployed contract address and actual chainId)
+      domain = {
+        name: "PublicationRegistry",
+        version: "1",
+        chainId: (await ethers.provider.getNetwork()).chainId,
+        verifyingContract: await mockOracleRegistry.getAddress(),
+      };
     });
 
     it("should submit manuscript and enter CHECKING state", async function () {
+      const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
+
       const tx = await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+        .connect(admin)
+        .submitManuscript(CID, METADATA, nonce, v, r, s);
 
       await expect(tx)
         .to.emit(mockOracleRegistry, "ManuscriptSubmitted")
@@ -258,14 +285,10 @@ describe("Publication System", function () {
     });
 
     it("should transition CHECKING → UNDER_REVIEW on plagiarism pass", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, nonce, v, r, s);
 
-      // Simulate plagiarism check passing (score = 15, under threshold of 30)
-      const tx = await mockOracleRegistry
-        .connect(admin)
-        .fulfillPlagiarism(0, 15);
+      const tx = await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 15);
 
       await expect(tx)
         .to.emit(mockOracleRegistry, "DecisionMade")
@@ -277,14 +300,10 @@ describe("Publication System", function () {
     });
 
     it("should transition CHECKING → REJECTED on plagiarism fail", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, nonce, v, r, s);
 
-      // Simulate plagiarism score exceeding threshold (score = 50)
-      const tx = await mockOracleRegistry
-        .connect(admin)
-        .fulfillPlagiarism(0, 50);
+      const tx = await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 50);
 
       await expect(tx)
         .to.emit(mockOracleRegistry, "DecisionMade")
@@ -295,20 +314,12 @@ describe("Publication System", function () {
     });
 
     it("should assign reviewers via fulfillRandomReviewers", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, nonce, v, r, s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
 
-      // Simulate oracle callback assigning reviewers
-      const reviewers = [
-        reviewer1.address,
-        reviewer2.address,
-        reviewer3.address,
-      ];
-      const tx = await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, reviewers);
+      const reviewers = [reviewer1.address, reviewer2.address, reviewer3.address];
+      const tx = await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, reviewers);
 
       await expect(tx)
         .to.emit(mockOracleRegistry, "ReviewersAssigned")
@@ -319,34 +330,21 @@ describe("Publication System", function () {
     });
 
     it("should handle review submission and majority ACCEPT", async function () {
-      // Setup: submit → pass plagiarism → assign reviewers
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [
-          reviewer1.address,
-          reviewer2.address,
-          reviewer3.address,
-        ]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address, reviewer3.address,
+      ]);
 
-      // Reviewer 1: ACCEPT
-      await mockOracleRegistry
-        .connect(reviewer1)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
+      const r1 = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r1.nonce, r1.v, r1.r, r1.s);
 
-      // Reviewer 2: ACCEPT → triggers majority
-      await mockOracleRegistry
-        .connect(reviewer2)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
+      const r2 = await signReview(reviewer2, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r2.nonce, r2.v, r2.r, r2.s);
 
-      // Even though review 3 hasn't submitted, we need all 3 for decision
-      // Actually, decision triggers when reviewCount == reviewers.length
-      await mockOracleRegistry
-        .connect(reviewer3)
-        .submitReview(0, REVIEW_CID, Verdict.REJECT);
+      const r3 = await signReview(reviewer3, 0, REVIEW_COMMENTS, Verdict.REJECT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.REJECT, REVIEW_COMMENTS, r3.nonce, r3.v, r3.r, r3.s);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.ACCEPTED);
@@ -355,142 +353,109 @@ describe("Publication System", function () {
     });
 
     it("should handle majority REJECT", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [
-          reviewer1.address,
-          reviewer2.address,
-          reviewer3.address,
-        ]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address, reviewer3.address,
+      ]);
 
-      await mockOracleRegistry
-        .connect(reviewer1)
-        .submitReview(0, REVIEW_CID, Verdict.REJECT);
-      await mockOracleRegistry
-        .connect(reviewer2)
-        .submitReview(0, REVIEW_CID, Verdict.REJECT);
-      await mockOracleRegistry
-        .connect(reviewer3)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
+      const r1 = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.REJECT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.REJECT, REVIEW_COMMENTS, r1.nonce, r1.v, r1.r, r1.s);
+
+      const r2 = await signReview(reviewer2, 0, REVIEW_COMMENTS, Verdict.REJECT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.REJECT, REVIEW_COMMENTS, r2.nonce, r2.v, r2.r, r2.s);
+
+      const r3 = await signReview(reviewer3, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r3.nonce, r3.v, r3.r, r3.s);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.REJECTED);
     });
 
     it("should handle majority REVISE", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [
-          reviewer1.address,
-          reviewer2.address,
-          reviewer3.address,
-        ]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address, reviewer3.address,
+      ]);
 
-      await mockOracleRegistry
-        .connect(reviewer1)
-        .submitReview(0, REVIEW_CID, Verdict.REVISE);
-      await mockOracleRegistry
-        .connect(reviewer2)
-        .submitReview(0, REVIEW_CID, Verdict.REVISE);
-      await mockOracleRegistry
-        .connect(reviewer3)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
+      const r1 = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.REVISE);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.REVISE, REVIEW_COMMENTS, r1.nonce, r1.v, r1.r, r1.s);
+
+      const r2 = await signReview(reviewer2, 0, REVIEW_COMMENTS, Verdict.REVISE);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.REVISE, REVIEW_COMMENTS, r2.nonce, r2.v, r2.r, r2.s);
+
+      const r3 = await signReview(reviewer3, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r3.nonce, r3.v, r3.r, r3.s);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.REVISION_REQUESTED);
     });
 
     it("should prevent double review", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [
-          reviewer1.address,
-          reviewer2.address,
-          reviewer3.address,
-        ]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address, reviewer3.address,
+      ]);
 
-      await mockOracleRegistry
-        .connect(reviewer1)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
+      const r1 = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r1.nonce, r1.v, r1.r, r1.s);
 
+      // reviewer1 tries to review again — nonce incremented so sig is invalid
+      const r1b = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
       await expect(
-        mockOracleRegistry
-          .connect(reviewer1)
-          .submitReview(0, REVIEW_CID, Verdict.ACCEPT)
+        mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r1b.nonce, r1b.v, r1b.r, r1b.s)
       ).to.be.revertedWithCustomError(mockOracleRegistry, "AlreadyReviewed");
     });
 
     it("should prevent non-assigned reviewer from submitting", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
       // Only assign reviewer1 and reviewer2
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [reviewer1.address, reviewer2.address]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address,
+      ]);
 
       // reviewer3 is not assigned
+      const r3 = await signReview(reviewer3, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
       await expect(
-        mockOracleRegistry
-          .connect(reviewer3)
-          .submitReview(0, REVIEW_CID, Verdict.ACCEPT)
-      ).to.be.revertedWithCustomError(
-        mockOracleRegistry,
-        "NotAssignedReviewer"
-      );
+        mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r3.nonce, r3.v, r3.r, r3.s)
+      ).to.be.revertedWithCustomError(mockOracleRegistry, "NotAssignedReviewer");
     });
 
     it("should handle revise → resubmit flow", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [
-          reviewer1.address,
-          reviewer2.address,
-          reviewer3.address,
-        ]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address, reviewer3.address,
+      ]);
 
       // All reviewers say REVISE
-      await mockOracleRegistry
-        .connect(reviewer1)
-        .submitReview(0, REVIEW_CID, Verdict.REVISE);
-      await mockOracleRegistry
-        .connect(reviewer2)
-        .submitReview(0, REVIEW_CID, Verdict.REVISE);
-      await mockOracleRegistry
-        .connect(reviewer3)
-        .submitReview(0, REVIEW_CID, Verdict.REVISE);
+      const r1 = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.REVISE);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.REVISE, REVIEW_COMMENTS, r1.nonce, r1.v, r1.r, r1.s);
+      const r2 = await signReview(reviewer2, 0, REVIEW_COMMENTS, Verdict.REVISE);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.REVISE, REVIEW_COMMENTS, r2.nonce, r2.v, r2.r, r2.s);
+      const r3 = await signReview(reviewer3, 0, REVIEW_COMMENTS, Verdict.REVISE);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.REVISE, REVIEW_COMMENTS, r3.nonce, r3.v, r3.r, r3.s);
 
       let ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.REVISION_REQUESTED);
 
       // Researcher revises
       const newCID = "QmRevisedCID987654321";
-      await mockOracleRegistry
-        .connect(researcher)
-        .reviseManuscript(0, newCID);
+      const revData = await signRevise(researcher, 0, newCID);
+      await mockOracleRegistry.connect(admin).reviseManuscript(0, newCID, revData.nonce, revData.v, revData.r, revData.s);
 
       ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.CHECKING);
       expect(ms.cid).to.equal(newCID);
       expect(ms.version).to.equal(2);
-      // Review counters should be reset
       expect(ms.acceptCount).to.equal(0);
       expect(ms.rejectCount).to.equal(0);
       expect(ms.reviseCount).to.equal(0);
@@ -498,44 +463,31 @@ describe("Publication System", function () {
     });
 
     it("should handle full publication flow with fee payment", async function () {
-      // Submit → plagiarism pass → assign reviewers → accept → pay → publish
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 5);
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [
-          reviewer1.address,
-          reviewer2.address,
-          reviewer3.address,
-        ]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address, reviewer3.address,
+      ]);
 
       // All accept
-      await mockOracleRegistry
-        .connect(reviewer1)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
-      await mockOracleRegistry
-        .connect(reviewer2)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
-      await mockOracleRegistry
-        .connect(reviewer3)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
+      const r1 = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r1.nonce, r1.v, r1.r, r1.s);
+      const r2 = await signReview(reviewer2, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r2.nonce, r2.v, r2.r, r2.s);
+      const r3 = await signReview(reviewer3, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r3.nonce, r3.v, r3.r, r3.s);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.ACCEPTED);
 
-      // Approve JRT spending
+      // researcher's wallet is ms.author (set via ecrecover) — direct call to payPublicationFee
       await journalToken
         .connect(researcher)
         .approve(await mockOracleRegistry.getAddress(), PUBLICATION_FEE);
 
-      // Pay publication fee
-      const tx = await mockOracleRegistry
-        .connect(researcher)
-        .payPublicationFee(0);
+      const tx = await mockOracleRegistry.connect(researcher).payPublicationFee(0);
 
-      // Verify events
       await expect(tx)
         .to.emit(mockOracleRegistry, "IncentivePaid")
         .withArgs(reviewer1.address, REVIEWER_INCENTIVE);
@@ -543,37 +495,27 @@ describe("Publication System", function () {
         .to.emit(mockOracleRegistry, "DecisionMade")
         .withArgs(0, Status.PUBLISHED);
 
-      // Verify final state
       const finalMs = await mockOracleRegistry.getManuscript(0);
       expect(finalMs.status).to.equal(Status.PUBLISHED);
 
-      // Verify reviewer balances increased
       const r1Balance = await journalToken.balanceOf(reviewer1.address);
       expect(r1Balance).to.equal(REVIEWER_INCENTIVE);
     });
 
     it("should revert payPublicationFee without sufficient allowance", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 5);
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [
-          reviewer1.address,
-          reviewer2.address,
-          reviewer3.address,
-        ]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address, reviewer3.address,
+      ]);
 
-      await mockOracleRegistry
-        .connect(reviewer1)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
-      await mockOracleRegistry
-        .connect(reviewer2)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
-      await mockOracleRegistry
-        .connect(reviewer3)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
+      const r1 = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r1.nonce, r1.v, r1.r, r1.s);
+      const r2 = await signReview(reviewer2, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r2.nonce, r2.v, r2.r, r2.s);
+      const r3 = await signReview(reviewer3, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r3.nonce, r3.v, r3.r, r3.s);
 
       // Don't approve — should revert
       await expect(
@@ -585,32 +527,24 @@ describe("Publication System", function () {
     });
 
     it("should revert if non-author tries to pay fee", async function () {
-      await mockOracleRegistry
-        .connect(researcher)
-        .submitManuscript(CID, METADATA);
+      const msData = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 5);
-      await mockOracleRegistry
-        .connect(admin)
-        .fulfillRandomReviewers(0, [
-          reviewer1.address,
-          reviewer2.address,
-          reviewer3.address,
-        ]);
+      await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
+        reviewer1.address, reviewer2.address, reviewer3.address,
+      ]);
 
-      await mockOracleRegistry
-        .connect(reviewer1)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
-      await mockOracleRegistry
-        .connect(reviewer2)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
-      await mockOracleRegistry
-        .connect(reviewer3)
-        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
+      const r1 = await signReview(reviewer1, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r1.nonce, r1.v, r1.r, r1.s);
+      const r2 = await signReview(reviewer2, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r2.nonce, r2.v, r2.r, r2.s);
+      const r3 = await signReview(reviewer3, 0, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await mockOracleRegistry.connect(admin).submitReview(0, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, r3.nonce, r3.v, r3.r, r3.s);
 
-      // outsider doesn't have RESEARCHER_ROLE
+      // outsider is not the author — _requireAuthor will reject them
       await expect(
         mockOracleRegistry.connect(outsider).payPublicationFee(0)
-      ).to.be.reverted;
+      ).to.be.revertedWithCustomError(mockOracleRegistry, "NotAuthor");
     });
   });
 
@@ -618,7 +552,6 @@ describe("Publication System", function () {
 
   describe("DOIToken", function () {
     it("should allow posting comments on existing DOI", async function () {
-      // Mint a DOI token manually via admin (who has default admin)
       await doiToken.grantRole(MINTER_ROLE, admin.address);
       await doiToken.mint(researcher.address, "ipfs://testURI");
 
@@ -673,7 +606,6 @@ describe("Publication System", function () {
         "PublicationRegistry"
       );
 
-      // outsider can't upgrade
       await expect(
         upgrades.upgradeProxy(await registry.getAddress(), PublicationRegistry.connect(outsider), {
           kind: "uups",

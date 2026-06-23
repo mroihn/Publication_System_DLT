@@ -8,7 +8,7 @@ const { ethers, upgrades } = require("hardhat");
  * (no mocks), following the updated architecture where reviewer selection
  * is performed off-chain by the oracle operator:
  *
- *   Researcher → submitManuscript
+ *   Researcher → signs EIP-712 typed data → backend relayer submits manuscript
  *     → ReviewOracle emits PlagiarismCheckRequested
  *   Oracle Operator → fulfillPlagiarismCheck
  *     → ReviewOracle calls Registry.fulfillPlagiarism
@@ -16,9 +16,11 @@ const { ethers, upgrades } = require("hardhat");
  *     → ReviewOracle emits ReviewerSelectionRequested
  *   Oracle Operator → fulfillReviewerSelection (off-chain selection)
  *     → ReviewOracle calls Registry.fulfillRandomReviewers
- *   Reviewers → submitReview (×N, N is odd ≥ 3)
- *   Researcher → approve JRT → payPublicationFee
+ *   Reviewers → sign EIP-712 typed data → backend relayer submits reviews (×N, N is odd ≥ 3)
+ *   Researcher → approve JRT → payPublicationFee (direct wallet call)
  *     → DOI minted with standard DOI format → PUBLISHED
+ *
+ * In tests, `admin` acts as the backend relayer (holds OPERATOR_ROLE).
  */
 describe("Full Flow — Submit to DOI", function () {
   // Contracts
@@ -34,6 +36,8 @@ describe("Full Flow — Submit to DOI", function () {
   // Constants
   const CID = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
   const METADATA = '{"title":"Decentralized Consensus","authors":["Alice","Bob"]}';
+  const REVIEW_CID = "QmTestReviewCID";
+  const REVIEW_COMMENTS = "Well-structured research with solid experimental results.";
   const PUBLICATION_FEE = ethers.parseEther("100");
   const REVIEWER_INCENTIVE = ethers.parseEther("10");
 
@@ -50,6 +54,61 @@ describe("Full Flow — Submit to DOI", function () {
 
   const Verdict = { ACCEPT: 0, REJECT: 1, REVISE: 2 };
 
+  // EIP-712 type definitions
+  const SUBMIT_MS_TYPES = {
+    SubmitManuscript: [
+      { name: "cid", type: "string" },
+      { name: "metadata", type: "string" },
+      { name: "nonce", type: "uint256" },
+    ],
+  };
+
+  const SUBMIT_REVIEW_TYPES = {
+    SubmitReview: [
+      { name: "msId", type: "uint256" },
+      { name: "comments", type: "string" },
+      { name: "verdict", type: "uint8" },
+      { name: "nonce", type: "uint256" },
+    ],
+  };
+
+  const REVISE_TYPES = {
+    ReviseManuscript: [
+      { name: "msId", type: "uint256" },
+      { name: "newCid", type: "string" },
+      { name: "nonce", type: "uint256" },
+    ],
+  };
+
+  // EIP-712 domain (set after registry is deployed)
+  let domain;
+
+  // Signing helpers
+  async function signMs(signer, cid, metadata) {
+    const nonce = await registry.nonces(signer.address);
+    const raw = await signer.signTypedData(domain, SUBMIT_MS_TYPES, { cid, metadata, nonce });
+    const { v, r, s } = ethers.Signature.from(raw);
+    return { nonce, v, r, s };
+  }
+
+  async function signReview(signer, msId, comments, verdict) {
+    const nonce = await registry.nonces(signer.address);
+    const raw = await signer.signTypedData(domain, SUBMIT_REVIEW_TYPES, {
+      msId: BigInt(msId), comments, verdict, nonce,
+    });
+    const { v, r, s } = ethers.Signature.from(raw);
+    return { nonce, v, r, s };
+  }
+
+  async function signRevise(signer, msId, newCid) {
+    const nonce = await registry.nonces(signer.address);
+    const raw = await signer.signTypedData(domain, REVISE_TYPES, {
+      msId: BigInt(msId), newCid, nonce,
+    });
+    const { v, r, s } = ethers.Signature.from(raw);
+    return { nonce, v, r, s };
+  }
+
   before(async function () {
     [admin, oracleOperator, researcher, reviewer1, reviewer2, reviewer3, reviewer4, reviewer5] =
       await ethers.getSigners();
@@ -61,6 +120,7 @@ describe("Full Flow — Submit to DOI", function () {
     roles.ADMIN      = ethers.keccak256(ethers.toUtf8Bytes("ADMIN_ROLE"));
     roles.MINTER     = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"));
     roles.REGISTRY   = ethers.keccak256(ethers.toUtf8Bytes("REGISTRY_ROLE"));
+    roles.OPERATOR   = ethers.keccak256(ethers.toUtf8Bytes("OPERATOR_ROLE"));
 
     // ─── Deploy all contracts ───
 
@@ -100,11 +160,10 @@ describe("Full Flow — Submit to DOI", function () {
     // ReviewOracle: grant ORACLE_ROLE to oracleOperator
     await reviewOracle.grantRole(roles.ORACLE, oracleOperator.address);
 
-    // Registry: grant RESEARCHER_ROLE
-    await registry.grantRole(roles.RESEARCHER, researcher.address);
+    // Registry: grant OPERATOR_ROLE to admin (backend relayer in tests)
+    await registry.grantRole(roles.OPERATOR, admin.address);
 
     // Registry: grant REVIEWER_ROLE to all potential reviewers
-    // (In production these match the addresses in the off-chain reviewer registry)
     await registry.grantRole(roles.REVIEWER, reviewer1.address);
     await registry.grantRole(roles.REVIEWER, reviewer2.address);
     await registry.grantRole(roles.REVIEWER, reviewer3.address);
@@ -113,6 +172,14 @@ describe("Full Flow — Submit to DOI", function () {
 
     // Fund researcher with JRT for publication fee
     await journalToken.transfer(researcher.address, ethers.parseEther("500"));
+
+    // Build EIP-712 domain
+    domain = {
+      name: "PublicationRegistry",
+      version: "1",
+      chainId: (await ethers.provider.getNetwork()).chainId,
+      verifyingContract: await registry.getAddress(),
+    };
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -123,11 +190,12 @@ describe("Full Flow — Submit to DOI", function () {
     let msId;
     let assignedReviewers;
 
-    it("Step 1: Researcher submits manuscript → CHECKING + PlagiarismCheckRequested emitted", async function () {
-      const tx = await registry.connect(researcher).submitManuscript(CID, METADATA);
+    it("Step 1: Researcher signs and submits manuscript → CHECKING + PlagiarismCheckRequested emitted", async function () {
+      const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
+      const tx = await registry.connect(admin).submitManuscript(CID, METADATA, nonce, v, r, s);
       msId = 0;
 
-      // ManuscriptSubmitted from Registry
+      // ManuscriptSubmitted author is researcher (recovered from sig), not admin
       await expect(tx).to.emit(registry, "ManuscriptSubmitted").withArgs(msId, researcher.address, CID);
 
       // PlagiarismCheckRequested from ReviewOracle (requestId=0, msId=0)
@@ -144,25 +212,17 @@ describe("Full Flow — Submit to DOI", function () {
       // plagiarism requestId = 0
       const tx = await reviewOracle.connect(oracleOperator).fulfillPlagiarismCheck(0, 15);
 
-      // PlagiarismCheckFulfilled from ReviewOracle
       await expect(tx).to.emit(reviewOracle, "PlagiarismCheckFulfilled").withArgs(0, 0, 15);
-
-      // DecisionMade(UNDER_REVIEW) from Registry
       await expect(tx).to.emit(registry, "DecisionMade").withArgs(msId, Status.UNDER_REVIEW);
-
-      // ReviewerSelectionRequested from ReviewOracle (reviewer requestId=0, msId=0)
       await expect(tx).to.emit(reviewOracle, "ReviewerSelectionRequested");
 
       const ms = await registry.getManuscript(msId);
       expect(ms.status).to.equal(Status.UNDER_REVIEW);
       expect(ms.plagiarismScore).to.equal(15);
-      // Reviewers not yet assigned (oracle must fulfill separately)
       expect(ms.reviewers.length).to.equal(0);
     });
 
     it("Step 2b: Oracle operator fulfills reviewer selection (off-chain, 3 reviewers) → ReviewersAssigned", async function () {
-      // The off-chain oracle selects 3 reviewers from its tiered registry.
-      // In tests we simulate this by picking 3 known accounts with REVIEWER_ROLE.
       const selectedReviewers = [reviewer1.address, reviewer2.address, reviewer3.address];
 
       // reviewer selection requestId = 0
@@ -182,9 +242,7 @@ describe("Full Flow — Submit to DOI", function () {
       console.log("    Assigned reviewers:", assignedReviewers);
     });
 
-    it("Step 3: All 3 reviewers submit ACCEPT verdicts → ACCEPTED", async function () {
-      const reviewCid = "QmTestReviewCID";
-
+    it("Step 3: All 3 reviewers sign and submit ACCEPT verdicts → ACCEPTED", async function () {
       const allSigners = [reviewer1, reviewer2, reviewer3, reviewer4, reviewer5];
       const signerMap = {};
       for (const r of allSigners) signerMap[r.address] = r;
@@ -193,16 +251,19 @@ describe("Full Flow — Submit to DOI", function () {
       const signer1 = signerMap[assignedReviewers[1]];
       const signer2 = signerMap[assignedReviewers[2]];
 
+      const d0 = await signReview(signer0, msId, REVIEW_COMMENTS, Verdict.ACCEPT);
       await expect(
-        registry.connect(signer0).submitReview(msId, reviewCid, Verdict.ACCEPT)
-      ).to.emit(registry, "ReviewSubmitted").withArgs(msId, signer0.address, Verdict.ACCEPT, reviewCid);
+        registry.connect(admin).submitReview(msId, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, d0.nonce, d0.v, d0.r, d0.s)
+      ).to.emit(registry, "ReviewSubmitted").withArgs(msId, signer0.address, Verdict.ACCEPT, REVIEW_CID);
 
+      const d1 = await signReview(signer1, msId, REVIEW_COMMENTS, Verdict.ACCEPT);
       await expect(
-        registry.connect(signer1).submitReview(msId, reviewCid, Verdict.ACCEPT)
-      ).to.emit(registry, "ReviewSubmitted").withArgs(msId, signer1.address, Verdict.ACCEPT, reviewCid);
+        registry.connect(admin).submitReview(msId, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, d1.nonce, d1.v, d1.r, d1.s)
+      ).to.emit(registry, "ReviewSubmitted").withArgs(msId, signer1.address, Verdict.ACCEPT, REVIEW_CID);
 
       // Third reviewer triggers decision
-      const tx = await registry.connect(signer2).submitReview(msId, reviewCid, Verdict.ACCEPT);
+      const d2 = await signReview(signer2, msId, REVIEW_COMMENTS, Verdict.ACCEPT);
+      const tx = await registry.connect(admin).submitReview(msId, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, d2.nonce, d2.v, d2.r, d2.s);
       await expect(tx).to.emit(registry, "DecisionMade").withArgs(msId, Status.ACCEPTED);
 
       const ms = await registry.getManuscript(msId);
@@ -218,34 +279,27 @@ describe("Full Flow — Submit to DOI", function () {
 
       const tx = await registry.connect(researcher).payPublicationFee(msId);
 
-      // Both DOIMinted and DOIRegistered events emitted
       await expect(tx).to.emit(registry, "DOIMinted");
       await expect(tx).to.emit(registry, "DOIRegistered");
       await expect(tx).to.emit(registry, "DecisionMade").withArgs(msId, Status.PUBLISHED);
 
-      // Verify 3 IncentivePaid events (one per reviewer)
       const ms = await registry.getManuscript(msId);
       for (const reviewer of ms.reviewers) {
         await expect(tx).to.emit(registry, "IncentivePaid").withArgs(reviewer, REVIEWER_INCENTIVE);
       }
 
-      // Final state checks
       expect(ms.status).to.equal(Status.PUBLISHED);
 
-      // JRT deducted from researcher (100 JRT)
       const researcherBalAfter = await journalToken.balanceOf(researcher.address);
       expect(researcherBalBefore - researcherBalAfter).to.equal(PUBLICATION_FEE);
 
-      // DOI NFT minted to the researcher
       const doiOwner = await doiToken.ownerOf(0);
       expect(doiOwner).to.equal(researcher.address);
 
-      // Token URI must start with "ipfs://" and contain "?doi=10."
       const tokenURI = await doiToken.tokenURI(0);
       expect(tokenURI).to.match(/^ipfs:\/\//);
       expect(tokenURI).to.include("?doi=10.");
 
-      // DOI field in manuscript struct must follow "10.XXXXX/..." format
       expect(ms.doi).to.match(/^10\.\d+\/.+/);
 
       console.log("    ✓ DOI Token ID 0 minted to:", researcher.address);
@@ -263,7 +317,8 @@ describe("Full Flow — Submit to DOI", function () {
       const cidBad = "QmBadPaperCopiedContent123";
       const metaBad = '{"title":"Copied Paper"}';
 
-      await registry.connect(researcher).submitManuscript(cidBad, metaBad);
+      const { nonce, v, r, s } = await signMs(researcher, cidBad, metaBad);
+      await registry.connect(admin).submitManuscript(cidBad, metaBad, nonce, v, r, s);
       // msId = 1 (second submission)
 
       // Fulfill with score=50 (above threshold of 30); plagiarismRequestId=1
@@ -274,7 +329,6 @@ describe("Full Flow — Submit to DOI", function () {
       const ms = await registry.getManuscript(1);
       expect(ms.status).to.equal(Status.REJECTED);
       expect(ms.plagiarismScore).to.equal(50);
-      // No reviewers should be assigned
       expect(ms.reviewers.length).to.equal(0);
     });
   });
@@ -289,7 +343,8 @@ describe("Full Flow — Submit to DOI", function () {
 
     it("Step 1: Submit and pass plagiarism → UNDER_REVIEW", async function () {
       const cid = "QmOriginalDraftV1abc";
-      await registry.connect(researcher).submitManuscript(cid, '{"title":"Draft V1"}');
+      const { nonce, v, r, s } = await signMs(researcher, cid, '{"title":"Draft V1"}');
+      await registry.connect(admin).submitManuscript(cid, '{"title":"Draft V1"}', nonce, v, r, s);
       msId = 2; // third manuscript
 
       // plagiarismRequestId = 2
@@ -310,16 +365,20 @@ describe("Full Flow — Submit to DOI", function () {
     });
 
     it("Step 2: Reviewers vote REVISE → REVISION_REQUESTED", async function () {
-      const reviewCid = "QmTestReviewCID";
       const signerMap = {};
       for (const r of [reviewer1, reviewer2, reviewer3, reviewer4, reviewer5]) {
         signerMap[r.address] = r;
       }
 
       // 2 REVISE + 1 ACCEPT = majority REVISE
-      await registry.connect(signerMap[assignedReviewers[0]]).submitReview(msId, reviewCid, Verdict.REVISE);
-      await registry.connect(signerMap[assignedReviewers[1]]).submitReview(msId, reviewCid, Verdict.REVISE);
-      await registry.connect(signerMap[assignedReviewers[2]]).submitReview(msId, reviewCid, Verdict.ACCEPT);
+      const d0 = await signReview(signerMap[assignedReviewers[0]], msId, REVIEW_COMMENTS, Verdict.REVISE);
+      await registry.connect(admin).submitReview(msId, REVIEW_CID, Verdict.REVISE, REVIEW_COMMENTS, d0.nonce, d0.v, d0.r, d0.s);
+
+      const d1 = await signReview(signerMap[assignedReviewers[1]], msId, REVIEW_COMMENTS, Verdict.REVISE);
+      await registry.connect(admin).submitReview(msId, REVIEW_CID, Verdict.REVISE, REVIEW_COMMENTS, d1.nonce, d1.v, d1.r, d1.s);
+
+      const d2 = await signReview(signerMap[assignedReviewers[2]], msId, REVIEW_COMMENTS, Verdict.ACCEPT);
+      await registry.connect(admin).submitReview(msId, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, d2.nonce, d2.v, d2.r, d2.s);
 
       const ms = await registry.getManuscript(msId);
       expect(ms.status).to.equal(Status.REVISION_REQUESTED);
@@ -327,10 +386,10 @@ describe("Full Flow — Submit to DOI", function () {
 
     it("Step 3: Researcher revises → re-enters CHECKING", async function () {
       const newCid = "QmRevisedDraftV2xyz";
-      const tx = await registry.connect(researcher).reviseManuscript(msId, newCid);
+      const { nonce, v, r, s } = await signRevise(researcher, msId, newCid);
+      const tx = await registry.connect(admin).reviseManuscript(msId, newCid, nonce, v, r, s);
 
       await expect(tx).to.emit(registry, "ManuscriptRevised").withArgs(msId, newCid, 2);
-      // New plagiarism check requested
       await expect(tx).to.emit(reviewOracle, "PlagiarismCheckRequested");
 
       const ms = await registry.getManuscript(msId);
@@ -361,13 +420,13 @@ describe("Full Flow — Submit to DOI", function () {
     });
 
     it("Step 5: New reviewers ACCEPT → ACCEPTED", async function () {
-      const reviewCid = "QmTestReviewCID";
       const signerMap = {};
       for (const r of [reviewer1, reviewer2, reviewer3, reviewer4, reviewer5]) {
         signerMap[r.address] = r;
       }
       for (const addr of assignedReviewers) {
-        await registry.connect(signerMap[addr]).submitReview(msId, reviewCid, Verdict.ACCEPT);
+        const d = await signReview(signerMap[addr], msId, REVIEW_COMMENTS, Verdict.ACCEPT);
+        await registry.connect(admin).submitReview(msId, REVIEW_CID, Verdict.ACCEPT, REVIEW_COMMENTS, d.nonce, d.v, d.r, d.s);
       }
 
       const ms = await registry.getManuscript(msId);
@@ -399,15 +458,13 @@ describe("Full Flow — Submit to DOI", function () {
 
   describe("Scenario 4: Reviewer selection guards", function () {
     it("should revert fulfillReviewerSelection with even count", async function () {
-      // Submit a new manuscript to get a new reviewerSelectionRequestId
-      // (we just need any pending reviewer request; for isolation, we create one)
       const cid = "QmGuardTest1";
-      await registry.connect(researcher).submitManuscript(cid, '{"title":"Guard Test"}');
+      const { nonce, v, r, s } = await signMs(researcher, cid, '{"title":"Guard Test"}');
+      await registry.connect(admin).submitManuscript(cid, '{"title":"Guard Test"}', nonce, v, r, s);
       // msId = 3; plagiarismRequestId = 4
       await reviewOracle.connect(oracleOperator).fulfillPlagiarismCheck(4, 5);
       // reviewerSelectionRequestId = 3
 
-      // Try to fulfill with even count (4) — must revert
       const evenReviewers = [
         reviewer1.address,
         reviewer2.address,
