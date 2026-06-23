@@ -40,17 +40,22 @@ export default function StatusTrackerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => {
-    setLoading(true);
-    setError(null);
+  // fetchData contains no synchronous setState — all updates happen in callbacks.
+  const fetchData = () =>
     apiClient
       .get<{ data: ManuscriptSummary[] }>("/manuscripts")
       .then((res) => setManuscripts(res.data.data))
       .catch(() => setError("Failed to load manuscripts."))
       .finally(() => setLoading(false));
-  };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { fetchData(); }, []); // fetchData is stable — defined inline each render
+
+  // Retry resets synchronous state then re-runs the async fetch.
+  const handleRetry = () => {
+    setError(null);
+    setLoading(true);
+    fetchData();
+  };
 
   return (
     <div className="max-w-5xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-12">
@@ -77,7 +82,7 @@ export default function StatusTrackerPage() {
         <div className="text-center py-20">
           <p className="text-red-600 font-medium mb-4">{error}</p>
           <button
-            onClick={load}
+            onClick={handleRetry}
             className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
           >
             Retry

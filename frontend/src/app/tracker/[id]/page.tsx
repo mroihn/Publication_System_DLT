@@ -218,17 +218,16 @@ export default function ManuscriptDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-    setLoading(true);
-    setError(null);
+    // All setState calls are inside async callbacks to avoid the
+    // react-hooks/set-state-in-effect rule (synchronous setState in effects
+    // triggers cascading renders). loading is true from useState(true).
     apiClient
       .get<ManuscriptDetail>(`/manuscripts/${id}`)
-      .then((res) => setMs(res.data))
-      .catch((err) => {
-        if (err.response?.status === 404) {
-          setError("Manuscript not found.");
-        } else {
-          setError("Failed to load manuscript.");
-        }
+      .then((res) => { setMs(res.data); setError(null); })
+      .catch((err: { response?: { status?: number } }) => {
+        setError(err.response?.status === 404
+          ? "Manuscript not found."
+          : "Failed to load manuscript.");
       })
       .finally(() => setLoading(false));
   }, [id]);

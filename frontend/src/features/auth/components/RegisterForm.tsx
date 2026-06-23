@@ -22,8 +22,9 @@ export default function RegisterForm() {
       await apiClient.post('/auth/register', { email: form.email, password: form.password });
       addToast('Registration successful! Please login.', 'success');
       router.push('/login');
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Registration failed');
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } };
+      setError(e.response?.data?.message || 'Registration failed');
     }
   };
 
