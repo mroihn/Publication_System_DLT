@@ -8,7 +8,7 @@ const RegistryABI = `[
   {"anonymous":false,"inputs":[{"indexed":true,"name":"reviewer","type":"address"},{"indexed":false,"name":"amount","type":"uint256"}],"name":"IncentivePaid","type":"event"},
   {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":false,"name":"newCid","type":"string"},{"indexed":false,"name":"version","type":"uint256"}],"name":"ManuscriptRevised","type":"event"},
   {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":true,"name":"author","type":"address"},{"indexed":false,"name":"cid","type":"string"}],"name":"ManuscriptSubmitted","type":"event"},
-  {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":true,"name":"reviewer","type":"address"},{"indexed":false,"name":"verdict","type":"uint8"}],"name":"ReviewSubmitted","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":true,"name":"reviewer","type":"address"},{"indexed":false,"name":"verdict","type":"uint8"},{"indexed":false,"name":"reviewCid","type":"string"}],"name":"ReviewSubmitted","type":"event"},
   {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":false,"name":"reviewers","type":"address[]"}],"name":"ReviewersAssigned","type":"event"}
 ]`
 

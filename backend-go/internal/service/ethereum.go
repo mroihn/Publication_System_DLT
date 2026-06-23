@@ -24,7 +24,7 @@ const (
 
 	registryABIJSON = `[
 		{"inputs":[{"name":"cid","type":"string"},{"name":"metadata","type":"string"}],"name":"submitManuscript","outputs":[],"stateMutability":"nonpayable","type":"function"},
-		{"inputs":[{"name":"msId","type":"uint256"},{"name":"hash","type":"bytes32"},{"name":"verdict","type":"uint8"}],"name":"submitReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
+		{"inputs":[{"name":"msId","type":"uint256"},{"name":"reviewCid","type":"string"},{"name":"verdict","type":"uint8"}],"name":"submitReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
 
 		{"type":"error","name":"InvalidState","inputs":[{"name":"msId","type":"uint256"},{"name":"expected","type":"uint8"},{"name":"actual","type":"uint8"}]},
 		{"type":"error","name":"NotAuthor","inputs":[{"name":"msId","type":"uint256"},{"name":"caller","type":"address"}]},
@@ -212,6 +212,6 @@ func (s *EthereumService) SubmitManuscript(cid, title string) (string, error) {
 	return s.sendTx("submitManuscript", cid, string(metadata))
 }
 
-func (s *EthereumService) SubmitReview(msId uint64, commentsHash [32]byte, verdict uint8) (string, error) {
-	return s.sendTx("submitReview", new(big.Int).SetUint64(msId), commentsHash, verdict)
+func (s *EthereumService) SubmitReview(msId uint64, reviewCid string, verdict uint8) (string, error) {
+	return s.sendTx("submitReview", new(big.Int).SetUint64(msId), reviewCid, verdict)
 }

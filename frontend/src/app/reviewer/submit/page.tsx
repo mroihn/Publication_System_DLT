@@ -4,13 +4,16 @@ import { useState } from "react";
 import { CheckCircle, MessageSquare } from "lucide-react";
 import { useAuth } from "@/core/context/AuthContext";
 import { useRouter } from "next/navigation";
+import { useToast } from "@/core/context/ToastContext";
+import { apiClient } from "@/core/services/api.client";
 
 export default function SubmitReviewPage() {
   const { isAuthenticated: isConnected } = useAuth();
   const router = useRouter();
-  
+  const { addToast } = useToast();
+
   const [manuscriptId, setManuscriptId] = useState("");
-  const [score, setScore] = useState(5);
+  const [verdict, setVerdict] = useState("0");
   const [critique, setCritique] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -28,11 +31,22 @@ export default function SubmitReviewPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
-      alert("Review submitted successfully!");
+    try {
+      await apiClient.post(`/manuscripts/${manuscriptId}/reviews`, {
+        verdict: Number(verdict),
+        comments: critique,
+      });
+      addToast("Review submitted successfully!", "success");
       router.push("/articles");
-    }, 2000);
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Failed to submit review. Please try again.";
+      addToast(msg, "error");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -43,7 +57,7 @@ export default function SubmitReviewPage() {
           <span>Submit Review</span>
         </h1>
         <p className="text-slate-400 mt-2">
-          Provide your score and textual critique for the assigned manuscript.
+          Provide your verdict and textual critique for the assigned manuscript.
         </p>
       </div>
 
@@ -64,19 +78,20 @@ export default function SubmitReviewPage() {
         </div>
 
         <div>
-          <label htmlFor="score" className="block text-sm font-medium text-slate-300 mb-2">
-            Score (1-10)
+          <label htmlFor="verdict" className="block text-sm font-medium text-slate-300 mb-2">
+            Verdict
           </label>
-          <input
-            type="number"
-            id="score"
+          <select
+            id="verdict"
             required
-            min={1}
-            max={10}
-            value={score}
-            onChange={(e) => setScore(Number(e.target.value))}
+            value={verdict}
+            onChange={(e) => setVerdict(e.target.value)}
             className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-          />
+          >
+            <option value="0">Accept</option>
+            <option value="2">Revise</option>
+            <option value="1">Reject</option>
+          </select>
         </div>
 
         <div>

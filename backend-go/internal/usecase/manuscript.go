@@ -2,9 +2,9 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mroihn/ta-proj/backend-go/internal/repository"
 )
 
@@ -14,7 +14,7 @@ type StorageService interface {
 
 type ContractService interface {
 	SubmitManuscript(cid, title string) (string, error)
-	SubmitReview(msId uint64, commentsHash [32]byte, verdict uint8) (string, error)
+	SubmitReview(msId uint64, reviewCid string, verdict uint8) (string, error)
 }
 
 type ManuscriptUseCase struct {
@@ -63,8 +63,12 @@ func (uc *ManuscriptUseCase) GetByID(ctx context.Context, msId uint64) (*reposit
 }
 
 func (uc *ManuscriptUseCase) SubmitReview(msId uint64, comments string, verdict uint8) (string, error) {
-	hash := crypto.Keccak256Hash([]byte(comments))
-	var b32 [32]byte
-	copy(b32[:], hash.Bytes())
-	return uc.contract.SubmitReview(msId, b32, verdict)
+	verdictStr := map[uint8]string{0: "ACCEPT", 1: "REJECT", 2: "REVISE"}[verdict]
+	payload, _ := json.Marshal(map[string]string{"comments": comments, "verdict": verdictStr})
+	cid, err := uc.storage.UploadFile(payload, fmt.Sprintf("review-ms%d.json", msId))
+	if err != nil {
+		return "", fmt.Errorf("upload review to IPFS: %w", err)
+	}
+	fmt.Printf("Manuscript review uploaded to IPFS: %s\n", cid)
+	return uc.contract.SubmitReview(msId, cid, verdict)
 }

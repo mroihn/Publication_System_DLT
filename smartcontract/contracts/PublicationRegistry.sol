@@ -120,7 +120,7 @@ contract PublicationRegistry is
 
     mapping(uint256 => Manuscript) private _manuscripts;
     mapping(uint256 => mapping(address => bool)) public hasReviewed;
-    mapping(uint256 => mapping(address => bytes32)) public reviewHashes;
+    mapping(uint256 => mapping(address => string)) public reviewHashes;
 
     error InvalidState(uint256 msId, Status expected, Status actual);
     error NotAuthor(uint256 msId, address caller);
@@ -136,7 +136,7 @@ contract PublicationRegistry is
     event DecisionMade(uint256 indexed msId, Status decision);
     event IncentivePaid(address indexed reviewer, uint256 amount);
     event ManuscriptRevised(uint256 indexed msId, string newCid, uint256 version);
-    event ReviewSubmitted(uint256 indexed msId, address indexed reviewer, Verdict verdict);
+    event ReviewSubmitted(uint256 indexed msId, address indexed reviewer, Verdict verdict, string reviewCid);
     event ReviewersAssigned(uint256 indexed msId, address[] reviewers);
     event DOIMinted(uint256 indexed msId, uint256 indexed doiTokenId);
     event DOIRegistered(uint256 indexed msId, string doi, uint256 indexed doiTokenId);
@@ -219,7 +219,7 @@ contract PublicationRegistry is
 
     function submitReview(
         uint256 msId,
-        bytes32 hash,
+        string calldata reviewCid,
         Verdict verdict
     ) external onlyRole(REVIEWER_ROLE) {
         Manuscript storage ms = _manuscripts[msId];
@@ -232,14 +232,14 @@ contract PublicationRegistry is
             revert AlreadyReviewed(msId, msg.sender);
 
         hasReviewed[msId][msg.sender] = true;
-        reviewHashes[msId][msg.sender] = hash;
+        reviewHashes[msId][msg.sender] = reviewCid;
         ms.reviewCount++;
 
         if (verdict == Verdict.ACCEPT) ms.acceptCount++;
         else if (verdict == Verdict.REJECT) ms.rejectCount++;
         else ms.reviseCount++;
 
-        emit ReviewSubmitted(msId, msg.sender, verdict);
+        emit ReviewSubmitted(msId, msg.sender, verdict, reviewCid);
 
         if (ms.reviewCount == ms.reviewers.length) {
             _evaluateDecision(msId);

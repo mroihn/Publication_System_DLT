@@ -23,10 +23,12 @@ func (h *ReviewSubmittedHandler) Handle(ctx context.Context, tx *sql.Tx, event *
 	if !ok {
 		return fmt.Errorf("ReviewSubmitted: unknown verdict code %d", verdictCode)
 	}
+	reviewCid := parser.StringArg(event.Args, "reviewCid")
 	if err := h.repo.InsertReview(ctx, tx, idxrepo.ReviewRow{
 		MsId:            msId,
 		ReviewerAddress: reviewer.Hex(),
 		Verdict:         verdict,
+		ReviewCid:       reviewCid,
 		TxHash:          event.Raw.TxHash.Hex(),
 		BlockNumber:     event.Raw.BlockNumber,
 	}); err != nil {

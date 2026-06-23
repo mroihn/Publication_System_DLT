@@ -27,6 +27,7 @@ interface Reviewer {
 interface Review {
   reviewer_address: string;
   verdict: string;
+  review_cid?: string;
   tx_hash: string;
   block_number: number;
   submitted_at: string;
@@ -392,6 +393,7 @@ export default function ManuscriptDetailPage() {
                   <th className="pb-2 font-medium">Verdict</th>
                   <th className="pb-2 font-medium">Block</th>
                   <th className="pb-2 font-medium">Tx</th>
+                  <th className="pb-2 font-medium">Review</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -401,6 +403,20 @@ export default function ManuscriptDetailPage() {
                     <td className="py-2"><VerdictBadge verdict={rv.verdict} /></td>
                     <td className="py-2 text-gray-500">{rv.block_number || "—"}</td>
                     <td className="py-2"><TxLink hash={rv.tx_hash} /></td>
+                    <td className="py-2">
+                      {rv.review_cid ? (
+                        <a
+                          href={`https://ipfs.io/ipfs/${rv.review_cid}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-indigo-400 hover:underline text-xs"
+                        >
+                          View full review ↗
+                        </a>
+                      ) : (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

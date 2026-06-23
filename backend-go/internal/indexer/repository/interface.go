@@ -45,6 +45,7 @@ type ReviewRow struct {
 	MsId            uint64
 	ReviewerAddress string
 	Verdict         string
+	ReviewCid       string
 	TxHash          string
 	BlockNumber     uint64
 }

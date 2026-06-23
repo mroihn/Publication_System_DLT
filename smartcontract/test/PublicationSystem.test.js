@@ -21,7 +21,7 @@ describe("Publication System", function () {
   // Commonly used constants
   const CID = "QmTestCID123456789abcdef";
   const METADATA = '{"title":"Test Paper","authors":["Alice"]}';
-  const REVIEW_HASH = ethers.keccak256(ethers.toUtf8Bytes("Great paper!"));
+  const REVIEW_CID = "QmTestReviewCID";
   const PUBLICATION_FEE = ethers.parseEther("100");
   const REVIEWER_INCENTIVE = ethers.parseEther("10");
 
@@ -248,7 +248,7 @@ describe("Publication System", function () {
 
       await expect(tx)
         .to.emit(mockOracleRegistry, "ManuscriptSubmitted")
-        .withArgs(0, CID);
+        .withArgs(0, researcher.address, CID);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.CHECKING);
@@ -335,18 +335,18 @@ describe("Publication System", function () {
       // Reviewer 1: ACCEPT
       await mockOracleRegistry
         .connect(reviewer1)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
 
       // Reviewer 2: ACCEPT → triggers majority
       await mockOracleRegistry
         .connect(reviewer2)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
 
       // Even though review 3 hasn't submitted, we need all 3 for decision
       // Actually, decision triggers when reviewCount == reviewers.length
       await mockOracleRegistry
         .connect(reviewer3)
-        .submitReview(0, REVIEW_HASH, Verdict.REJECT);
+        .submitReview(0, REVIEW_CID, Verdict.REJECT);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.ACCEPTED);
@@ -369,13 +369,13 @@ describe("Publication System", function () {
 
       await mockOracleRegistry
         .connect(reviewer1)
-        .submitReview(0, REVIEW_HASH, Verdict.REJECT);
+        .submitReview(0, REVIEW_CID, Verdict.REJECT);
       await mockOracleRegistry
         .connect(reviewer2)
-        .submitReview(0, REVIEW_HASH, Verdict.REJECT);
+        .submitReview(0, REVIEW_CID, Verdict.REJECT);
       await mockOracleRegistry
         .connect(reviewer3)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.REJECTED);
@@ -396,13 +396,13 @@ describe("Publication System", function () {
 
       await mockOracleRegistry
         .connect(reviewer1)
-        .submitReview(0, REVIEW_HASH, Verdict.REVISE);
+        .submitReview(0, REVIEW_CID, Verdict.REVISE);
       await mockOracleRegistry
         .connect(reviewer2)
-        .submitReview(0, REVIEW_HASH, Verdict.REVISE);
+        .submitReview(0, REVIEW_CID, Verdict.REVISE);
       await mockOracleRegistry
         .connect(reviewer3)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.REVISION_REQUESTED);
@@ -423,12 +423,12 @@ describe("Publication System", function () {
 
       await mockOracleRegistry
         .connect(reviewer1)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
 
       await expect(
         mockOracleRegistry
           .connect(reviewer1)
-          .submitReview(0, REVIEW_HASH, Verdict.ACCEPT)
+          .submitReview(0, REVIEW_CID, Verdict.ACCEPT)
       ).to.be.revertedWithCustomError(mockOracleRegistry, "AlreadyReviewed");
     });
 
@@ -446,7 +446,7 @@ describe("Publication System", function () {
       await expect(
         mockOracleRegistry
           .connect(reviewer3)
-          .submitReview(0, REVIEW_HASH, Verdict.ACCEPT)
+          .submitReview(0, REVIEW_CID, Verdict.ACCEPT)
       ).to.be.revertedWithCustomError(
         mockOracleRegistry,
         "NotAssignedReviewer"
@@ -469,13 +469,13 @@ describe("Publication System", function () {
       // All reviewers say REVISE
       await mockOracleRegistry
         .connect(reviewer1)
-        .submitReview(0, REVIEW_HASH, Verdict.REVISE);
+        .submitReview(0, REVIEW_CID, Verdict.REVISE);
       await mockOracleRegistry
         .connect(reviewer2)
-        .submitReview(0, REVIEW_HASH, Verdict.REVISE);
+        .submitReview(0, REVIEW_CID, Verdict.REVISE);
       await mockOracleRegistry
         .connect(reviewer3)
-        .submitReview(0, REVIEW_HASH, Verdict.REVISE);
+        .submitReview(0, REVIEW_CID, Verdict.REVISE);
 
       let ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.REVISION_REQUESTED);
@@ -514,13 +514,13 @@ describe("Publication System", function () {
       // All accept
       await mockOracleRegistry
         .connect(reviewer1)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
       await mockOracleRegistry
         .connect(reviewer2)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
       await mockOracleRegistry
         .connect(reviewer3)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.ACCEPTED);
@@ -567,13 +567,13 @@ describe("Publication System", function () {
 
       await mockOracleRegistry
         .connect(reviewer1)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
       await mockOracleRegistry
         .connect(reviewer2)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
       await mockOracleRegistry
         .connect(reviewer3)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
 
       // Don't approve — should revert
       await expect(
@@ -599,13 +599,13 @@ describe("Publication System", function () {
 
       await mockOracleRegistry
         .connect(reviewer1)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
       await mockOracleRegistry
         .connect(reviewer2)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
       await mockOracleRegistry
         .connect(reviewer3)
-        .submitReview(0, REVIEW_HASH, Verdict.ACCEPT);
+        .submitReview(0, REVIEW_CID, Verdict.ACCEPT);
 
       // outsider doesn't have RESEARCHER_ROLE
       await expect(

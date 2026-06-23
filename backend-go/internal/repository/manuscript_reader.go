@@ -34,6 +34,7 @@ type ManuscriptReviewer struct {
 type ManuscriptReview struct {
 	ReviewerAddress string    `json:"reviewer_address"`
 	Verdict         string    `json:"verdict"`
+	ReviewCid       *string   `json:"review_cid,omitempty"`
 	TxHash          string    `json:"tx_hash"`
 	BlockNumber     int64     `json:"block_number"`
 	SubmittedAt     time.Time `json:"submitted_at"`
@@ -168,7 +169,7 @@ func (r *PostgresManuscriptReader) GetManuscriptByID(ctx context.Context, msId u
 
 	// Reviews
 	rrows, err := r.db.QueryContext(ctx, `
-		SELECT reviewer_address, verdict,
+		SELECT reviewer_address, verdict, review_cid,
 		       COALESCE(tx_hash,''), COALESCE(block_number,0), submitted_at
 		FROM reviews WHERE ms_id = $1 ORDER BY block_number
 	`, msId)
@@ -178,7 +179,7 @@ func (r *PostgresManuscriptReader) GetManuscriptByID(ctx context.Context, msId u
 	defer rrows.Close()
 	for rrows.Next() {
 		var rv ManuscriptReview
-		if err := rrows.Scan(&rv.ReviewerAddress, &rv.Verdict, &rv.TxHash, &rv.BlockNumber, &rv.SubmittedAt); err != nil {
+		if err := rrows.Scan(&rv.ReviewerAddress, &rv.Verdict, &rv.ReviewCid, &rv.TxHash, &rv.BlockNumber, &rv.SubmittedAt); err != nil {
 			return nil, err
 		}
 		d.Reviews = append(d.Reviews, rv)

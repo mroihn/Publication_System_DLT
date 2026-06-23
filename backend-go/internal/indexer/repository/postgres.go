@@ -130,10 +130,10 @@ func (r *PostgresIndexerRepository) SetReviewers(ctx context.Context, tx *sql.Tx
 
 func (r *PostgresIndexerRepository) InsertReview(ctx context.Context, tx *sql.Tx, review ReviewRow) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO reviews (ms_id, reviewer_address, verdict, tx_hash, block_number)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO reviews (ms_id, reviewer_address, verdict, review_cid, tx_hash, block_number)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT DO NOTHING`,
-		review.MsId, strings.ToLower(review.ReviewerAddress), review.Verdict, review.TxHash, review.BlockNumber,
+		review.MsId, strings.ToLower(review.ReviewerAddress), review.Verdict, review.ReviewCid, review.TxHash, review.BlockNumber,
 	)
 	return err
 }

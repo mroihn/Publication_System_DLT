@@ -125,14 +125,14 @@ describe("Full Flow — Submit to DOI", function () {
 
     it("Step 1: Researcher submits manuscript → CHECKING + PlagiarismCheckRequested emitted", async function () {
       const tx = await registry.connect(researcher).submitManuscript(CID, METADATA);
+      msId = 0;
 
       // ManuscriptSubmitted from Registry
-      await expect(tx).to.emit(registry, "ManuscriptSubmitted").withArgs(0, CID);
+      await expect(tx).to.emit(registry, "ManuscriptSubmitted").withArgs(msId, researcher.address, CID);
 
       // PlagiarismCheckRequested from ReviewOracle (requestId=0, msId=0)
       await expect(tx).to.emit(reviewOracle, "PlagiarismCheckRequested");
 
-      msId = 0;
       const ms = await registry.getManuscript(msId);
       expect(ms.status).to.equal(Status.CHECKING);
       expect(ms.author).to.equal(researcher.address);
@@ -183,7 +183,7 @@ describe("Full Flow — Submit to DOI", function () {
     });
 
     it("Step 3: All 3 reviewers submit ACCEPT verdicts → ACCEPTED", async function () {
-      const reviewHash = ethers.keccak256(ethers.toUtf8Bytes("Excellent research!"));
+      const reviewCid = "QmTestReviewCID";
 
       const allSigners = [reviewer1, reviewer2, reviewer3, reviewer4, reviewer5];
       const signerMap = {};
@@ -194,15 +194,15 @@ describe("Full Flow — Submit to DOI", function () {
       const signer2 = signerMap[assignedReviewers[2]];
 
       await expect(
-        registry.connect(signer0).submitReview(msId, reviewHash, Verdict.ACCEPT)
-      ).to.emit(registry, "ReviewSubmitted").withArgs(msId, signer0.address, Verdict.ACCEPT);
+        registry.connect(signer0).submitReview(msId, reviewCid, Verdict.ACCEPT)
+      ).to.emit(registry, "ReviewSubmitted").withArgs(msId, signer0.address, Verdict.ACCEPT, reviewCid);
 
       await expect(
-        registry.connect(signer1).submitReview(msId, reviewHash, Verdict.ACCEPT)
-      ).to.emit(registry, "ReviewSubmitted").withArgs(msId, signer1.address, Verdict.ACCEPT);
+        registry.connect(signer1).submitReview(msId, reviewCid, Verdict.ACCEPT)
+      ).to.emit(registry, "ReviewSubmitted").withArgs(msId, signer1.address, Verdict.ACCEPT, reviewCid);
 
       // Third reviewer triggers decision
-      const tx = await registry.connect(signer2).submitReview(msId, reviewHash, Verdict.ACCEPT);
+      const tx = await registry.connect(signer2).submitReview(msId, reviewCid, Verdict.ACCEPT);
       await expect(tx).to.emit(registry, "DecisionMade").withArgs(msId, Status.ACCEPTED);
 
       const ms = await registry.getManuscript(msId);
@@ -310,16 +310,16 @@ describe("Full Flow — Submit to DOI", function () {
     });
 
     it("Step 2: Reviewers vote REVISE → REVISION_REQUESTED", async function () {
-      const reviewHash = ethers.keccak256(ethers.toUtf8Bytes("Needs more work"));
+      const reviewCid = "QmTestReviewCID";
       const signerMap = {};
       for (const r of [reviewer1, reviewer2, reviewer3, reviewer4, reviewer5]) {
         signerMap[r.address] = r;
       }
 
       // 2 REVISE + 1 ACCEPT = majority REVISE
-      await registry.connect(signerMap[assignedReviewers[0]]).submitReview(msId, reviewHash, Verdict.REVISE);
-      await registry.connect(signerMap[assignedReviewers[1]]).submitReview(msId, reviewHash, Verdict.REVISE);
-      await registry.connect(signerMap[assignedReviewers[2]]).submitReview(msId, reviewHash, Verdict.ACCEPT);
+      await registry.connect(signerMap[assignedReviewers[0]]).submitReview(msId, reviewCid, Verdict.REVISE);
+      await registry.connect(signerMap[assignedReviewers[1]]).submitReview(msId, reviewCid, Verdict.REVISE);
+      await registry.connect(signerMap[assignedReviewers[2]]).submitReview(msId, reviewCid, Verdict.ACCEPT);
 
       const ms = await registry.getManuscript(msId);
       expect(ms.status).to.equal(Status.REVISION_REQUESTED);
@@ -361,13 +361,13 @@ describe("Full Flow — Submit to DOI", function () {
     });
 
     it("Step 5: New reviewers ACCEPT → ACCEPTED", async function () {
-      const reviewHash = ethers.keccak256(ethers.toUtf8Bytes("Much improved!"));
+      const reviewCid = "QmTestReviewCID";
       const signerMap = {};
       for (const r of [reviewer1, reviewer2, reviewer3, reviewer4, reviewer5]) {
         signerMap[r.address] = r;
       }
       for (const addr of assignedReviewers) {
-        await registry.connect(signerMap[addr]).submitReview(msId, reviewHash, Verdict.ACCEPT);
+        await registry.connect(signerMap[addr]).submitReview(msId, reviewCid, Verdict.ACCEPT);
       }
 
       const ms = await registry.getManuscript(msId);

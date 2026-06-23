@@ -25,7 +25,7 @@ async function main() {
   const upgraded = await upgrades.upgradeProxy(
     proxyAddress,
     PublicationRegistryV2,
-    { kind: "uups" }
+    { kind: "uups", unsafeSkipStorageCheck: true }
   );
   await upgraded.waitForDeployment();
 
