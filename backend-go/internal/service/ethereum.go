@@ -106,14 +106,37 @@ func (s *EthereumService) sendTx(methodName string, args ...any) (string, error)
 	}
 
 	toAddr := common.HexToAddress(s.contractAddress)
-	tx := types.NewTransaction(nonce, toAddr, big.NewInt(0), 300000, gasPrice, data)
 	signer := types.NewEIP155Signer(chainID)
-	signed, err := types.SignTx(tx, signer, s.privateKey)
-	if err != nil {
-		return "", fmt.Errorf("sign tx: %w", err)
+
+	callMsg := ethereum.CallMsg{From: fromAddress, To: &toAddr, Data: data}
+	gasLimit := uint64(400000)
+	if estimated, estErr := client.EstimateGas(ctx, callMsg); estErr == nil {
+		gasLimit = estimated * 12 / 10 // 20% buffer
+	} else {
+		reason := revertReason(ctx, client, fromAddress, toAddr, data, nil)
+		return "", fmt.Errorf("%s", reason)
 	}
-	if err := client.SendTransaction(ctx, signed); err != nil {
-		return "", fmt.Errorf("broadcast tx: %w", err)
+
+	var signed *types.Transaction
+	for attempt := 0; attempt < 4; attempt++ {
+		rawTx := types.NewTransaction(nonce, toAddr, big.NewInt(0), gasLimit, gasPrice, data)
+		signed, err = types.SignTx(rawTx, signer, s.privateKey)
+		if err != nil {
+			return "", fmt.Errorf("sign tx: %w", err)
+		}
+		sendErr := client.SendTransaction(ctx, signed)
+		if sendErr == nil {
+			break
+		}
+		if !strings.Contains(sendErr.Error(), "replacement transaction underpriced") {
+			return "", fmt.Errorf("broadcast tx: %w", sendErr)
+		}
+		gasPrice = new(big.Int).Mul(gasPrice, big.NewInt(120))
+		gasPrice = new(big.Int).Div(gasPrice, big.NewInt(100))
+		if attempt == 3 {
+			return "", fmt.Errorf("broadcast tx: %w", sendErr)
+		}
+		time.Sleep(2 * time.Second)
 	}
 
 	receipt, err := bind.WaitMined(ctx, client, signed)

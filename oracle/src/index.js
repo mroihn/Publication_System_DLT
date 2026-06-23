@@ -16,7 +16,9 @@ async function main() {
   const wallet   = new ethers.NonceManager(baseWallet);
   const contract = new ethers.Contract(ORACLE_ADDR, ORACLE_ABI, wallet);
 
-  console.log(`[Oracle]   Operator address : ${wallet.address}`);
+  const operatorAddress = await wallet.getAddress();
+
+  console.log(`[Oracle]   Operator address : ${operatorAddress}`);
   console.log(`[Oracle]   ReviewOracle     : ${ORACLE_ADDR}`);
   console.log(`[Oracle]   NUM_REVIEWERS    : ${NUM_REVIEWERS} (must be odd ≥ 3)\n`);
 
@@ -28,7 +30,7 @@ async function main() {
   }
   console.log();
 
-  const balance = await provider.getBalance(wallet.address);
+  const balance = await provider.getBalance(operatorAddress);
   console.log(`[Oracle]   Balance          : ${ethers.formatEther(balance)} ETH\n`);
 
   if (balance === 0n) {
@@ -36,12 +38,14 @@ async function main() {
   }
 
   console.log("[Listen]  Subscribing to PlagiarismCheckRequested events...");
-  contract.on("PlagiarismCheckRequested", (requestId, msId, cid) => {
+  contract.on("PlagiarismCheckRequested", async (requestId, msId, cid) => {
+    await wallet.reset();
     handlePlagiarismRequest(contract, requestId, msId, cid).catch(console.error);
   });
 
   console.log("[Listen]  Subscribing to ReviewerSelectionRequested events...\n");
-  contract.on("ReviewerSelectionRequested", (requestId, msId) => {
+  contract.on("ReviewerSelectionRequested", async (requestId, msId) => {
+    await wallet.reset();
     handleReviewerSelection(contract, requestId, msId).catch(console.error);
   });
 
