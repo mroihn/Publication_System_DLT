@@ -280,7 +280,6 @@ contract PublicationRegistry is
         ));
         address actualReviewer = ECDSA.recover(_hashTypedDataV4(structHash), v, r, s);
         if (actualReviewer == address(0)) revert InvalidSignature();
-        if (!hasRole(REVIEWER_ROLE, actualReviewer)) revert NotAssignedReviewer(msId, actualReviewer);
         if (nonces[actualReviewer] != nonce) revert InvalidSignature();
         unchecked { nonces[actualReviewer]++; }
 

@@ -31,12 +31,41 @@ export const publicClient = createPublicClient({
   transport: http(RPC_URL || undefined),
 });
 
+const SEPOLIA_CHAIN_ID = "0xaa36a7";
+
 export async function getWalletClient() {
   if (!window.ethereum) throw new Error("MetaMask is not installed");
+
   const accounts = (await window.ethereum.request({
     method: "eth_requestAccounts",
   })) as string[];
   const account = accounts[0] as `0x${string}`;
+
+  const chainId = await window.ethereum.request({ method: "eth_chainId" }) as string;
+  if (chainId.toLowerCase() !== SEPOLIA_CHAIN_ID) {
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: SEPOLIA_CHAIN_ID }],
+      });
+    } catch (err: unknown) {
+      if ((err as { code?: number })?.code === 4902) {
+        await window.ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: SEPOLIA_CHAIN_ID,
+            chainName: "Sepolia Testnet",
+            nativeCurrency: { name: "Sepolia Ether", symbol: "ETH", decimals: 18 },
+            rpcUrls: ["https://rpc.sepolia.org"],
+            blockExplorerUrls: ["https://sepolia.etherscan.io"],
+          }],
+        });
+      } else {
+        throw new Error("Please switch MetaMask to the Sepolia testnet to continue.");
+      }
+    }
+  }
+
   return {
     client: createWalletClient({
       account,
@@ -59,6 +88,6 @@ export async function getNonce(address: `0x${string}`): Promise<bigint> {
 export const DOMAIN = {
   name: "PublicationRegistry",
   version: "1",
-  chainId: 11155111, // Sepolia
+  chainId: 11155111,
   verifyingContract: REGISTRY_ADDRESS,
 } as const;

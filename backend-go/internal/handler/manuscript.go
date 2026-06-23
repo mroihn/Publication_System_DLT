@@ -71,7 +71,7 @@ func (h *ManuscriptHandler) UploadFile(c *gin.Context) {
 
 type submitManuscriptRequest struct {
 	CID       string `json:"cid"`
-	Title     string `json:"title"`
+	Metadata  string `json:"metadata"` // exact JSON string that was EIP-712 signed
 	Signature string `json:"signature"` // 0x-prefixed 65-byte hex from MetaMask
 	Nonce     string `json:"nonce"`     // uint256 as decimal string (BigInt from JS)
 }
@@ -84,8 +84,8 @@ func (h *ManuscriptHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	if req.CID == "" || req.Title == "" || req.Signature == "" || req.Nonce == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "cid, title, signature, and nonce are required"})
+	if req.CID == "" || req.Metadata == "" || req.Signature == "" || req.Nonce == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "cid, metadata, signature, and nonce are required"})
 		return
 	}
 
@@ -95,7 +95,7 @@ func (h *ManuscriptHandler) Submit(c *gin.Context) {
 		return
 	}
 
-	result, err := h.manuscriptUC.SubmitOnChain(req.CID, req.Title, req.Signature, nonce)
+	result, err := h.manuscriptUC.SubmitOnChain(req.CID, req.Metadata, req.Signature, nonce)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

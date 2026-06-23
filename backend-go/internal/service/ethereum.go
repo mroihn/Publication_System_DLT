@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -35,7 +34,12 @@ const (
 		{"type":"error","name":"PlagiarismThresholdExceeded","inputs":[{"name":"msId","type":"uint256"},{"name":"score","type":"uint256"}]},
 		{"type":"error","name":"InvalidSignature","inputs":[]},
 		{"type":"error","name":"TransferFailed","inputs":[]},
-		{"type":"error","name":"ZeroAddress","inputs":[]}
+		{"type":"error","name":"ZeroAddress","inputs":[]},
+		{"type":"error","name":"AccessControlUnauthorizedAccount","inputs":[{"name":"account","type":"address"},{"name":"neededRole","type":"bytes32"}]},
+		{"type":"error","name":"AccessControlBadConfirmation","inputs":[]},
+		{"type":"error","name":"ECDSAInvalidSignature","inputs":[]},
+		{"type":"error","name":"ECDSAInvalidSignatureLength","inputs":[{"name":"length","type":"uint256"}]},
+		{"type":"error","name":"ECDSAInvalidSignatureS","inputs":[{"name":"s","type":"bytes32"}]}
 	]`
 )
 
@@ -223,13 +227,12 @@ func decodeCustomError(payload []byte) string {
 	return ""
 }
 
-func (s *EthereumService) SubmitManuscript(cid, title, signature string, nonce uint64) (string, error) {
+func (s *EthereumService) SubmitManuscript(cid, metadata, signature string, nonce uint64) (string, error) {
 	v, r, sv, err := splitSig(signature)
 	if err != nil {
 		return "", fmt.Errorf("split signature: %w", err)
 	}
-	metadata, _ := json.Marshal(map[string]string{"title": title})
-	return s.sendTx("submitManuscript", cid, string(metadata), new(big.Int).SetUint64(nonce), v, r, sv)
+	return s.sendTx("submitManuscript", cid, metadata, new(big.Int).SetUint64(nonce), v, r, sv)
 }
 
 func (s *EthereumService) SubmitReview(msId uint64, reviewCid, comments, signature string, nonce uint64, verdict uint8) (string, error) {

@@ -89,10 +89,11 @@ export default function SubmitManuscriptPage() {
       });
 
       // Step 3: submit signed data to backend → contract
+      // metadata must be the exact string that was signed — do not reconstruct it
       setStep("submitting");
       await apiClient.post("/manuscripts/submit", {
         cid,
-        title,
+        metadata,
         signature,
         nonce: nonce.toString(),
       });

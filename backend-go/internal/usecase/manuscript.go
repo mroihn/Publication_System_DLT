@@ -40,9 +40,9 @@ func (uc *ManuscriptUseCase) UploadFile(data []byte, filename string) (string, e
 }
 
 // SubmitOnChain submits a pre-uploaded manuscript to the smart contract.
-// The caller must provide the IPFS CID, EIP-712 signature, and nonce.
-func (uc *ManuscriptUseCase) SubmitOnChain(cid, title, signature string, nonce uint64) (*SubmitResult, error) {
-	txHash, err := uc.contract.SubmitManuscript(cid, title, signature, nonce)
+// metadata must be the exact JSON string that was EIP-712 signed on the frontend.
+func (uc *ManuscriptUseCase) SubmitOnChain(cid, metadata, signature string, nonce uint64) (*SubmitResult, error) {
+	txHash, err := uc.contract.SubmitManuscript(cid, metadata, signature, nonce)
 	if err != nil {
 		return nil, err
 	}
