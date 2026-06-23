@@ -29,16 +29,22 @@ export default function ProfilePage() {
 
   if (!isAuthenticated) return null;
 
+  interface EthereumProvider {
+    request: (args: { method: string }) => Promise<string[]>;
+  }
+  type WindowWithEthereum = Window & { ethereum?: EthereumProvider };
+
   const handleConnectAndLink = async () => {
     setError(null);
     try {
       setIsLinking(true);
 
-      if (typeof window === 'undefined' || !(window as any).ethereum) {
+      const ethereum = (window as WindowWithEthereum).ethereum;
+      if (typeof window === 'undefined' || !ethereum) {
         throw new Error('MetaMask is not installed. Please install it to proceed.');
       }
 
-      const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
+      const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
       const walletAddress = accounts[0];
 
       if (!walletAddress) {
@@ -46,17 +52,18 @@ export default function ProfilePage() {
       }
 
       await apiClient.patch('/users/wallet-bind', { walletAddress });
-      
+
       addToast(`MetaMask Wallet ${walletAddress.slice(0,6)}... successfully bound to your account!`, 'success');
       setTimeout(() => {
         window.location.reload();
       }, 1500);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      if (err.code === 4001) {
+      const e = err as { code?: number; response?: { data?: { message?: string } }; message?: string };
+      if (e.code === 4001) {
         setError('You rejected the connection request in MetaMask.');
       } else {
-        setError(err.response?.data?.message || err.message || 'An unknown error occurred.');
+        setError(e.response?.data?.message || e.message || 'An unknown error occurred.');
       }
     } finally {
       setIsLinking(false);

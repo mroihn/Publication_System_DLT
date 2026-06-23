@@ -59,7 +59,7 @@ export default function SubmitManuscriptPage() {
 
       addToast("Manuscript successfully uploaded and submitted to the smart contract!", "success");
       router.push("/tracker");
-    } catch (err) {
+    } catch {
       addToast("Submission failed. Please try again.", "error");
     } finally {
       setIsSubmitting(false);

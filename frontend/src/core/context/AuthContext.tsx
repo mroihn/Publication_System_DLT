@@ -3,11 +3,17 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { apiClient } from '../services/api.client';
 
+interface User {
+  id: string;
+  email: string;
+  walletAddress?: string;
+}
+
 interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
-  user: any | null;
-  login: (token: string, userData: any) => void;
+  user: User | null;
+  login: (token: string, userData: User) => void;
   logout: () => void;
 }
 
@@ -16,7 +22,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     const verifySession = async () => {
@@ -29,10 +35,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       try {
         apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        const { data } = await apiClient.get('/users/me');
-        setUser(data as any);
+        const { data } = await apiClient.get<User>('/users/me');
+        setUser(data);
         setIsAuthenticated(true);
-      } catch (err) {
+      } catch {
         setIsAuthenticated(false);
         setUser(null);
       } finally {
@@ -42,7 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     verifySession();
   }, []);
 
-  const login = (token: string, userData: any) => {
+  const login = (token: string, userData: User) => {
     localStorage.setItem('token', token);
     apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     setIsAuthenticated(true);
