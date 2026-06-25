@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -15,9 +15,13 @@ import {
   Users,
   ShieldCheck,
   GitCommit,
+  Award,
+  Wallet,
 } from "lucide-react";
 import { apiClient } from "@/core/services/api.client";
 import { ManuscriptStepper } from "@/components/ManuscriptStepper";
+import { useToast } from "@/core/context/ToastContext";
+import { payPublicationFee, PUBLICATION_FEE, type PayStep } from "@/core/services/wallet";
 
 interface Reviewer {
   reviewer_address: string;
@@ -213,25 +217,78 @@ export default function ManuscriptDetailPage() {
   const params = useParams();
   const id = params?.id as string;
 
+  const { addToast } = useToast();
+
   const [ms, setMs] = useState<ManuscriptDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Pay-fee flow state
+  const [payStep, setPayStep] = useState<PayStep | null>(null);
+  const [payError, setPayError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchMs = useCallback(() => {
+    return apiClient.get<ManuscriptDetail>(`/manuscripts/${id}`).then((res) => res.data);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
     // All setState calls are inside async callbacks to avoid the
     // react-hooks/set-state-in-effect rule (synchronous setState in effects
     // triggers cascading renders). loading is true from useState(true).
-    apiClient
-      .get<ManuscriptDetail>(`/manuscripts/${id}`)
-      .then((res) => { setMs(res.data); setError(null); })
+    fetchMs()
+      .then((data) => { setMs(data); setError(null); })
       .catch((err: { response?: { status?: number } }) => {
         setError(err.response?.status === 404
           ? "Manuscript not found."
           : "Failed to load manuscript.");
       })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [fetchMs, id]);
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  // Poll until the indexer flips status to PUBLISHED after the on-chain tx.
+  const startPolling = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const data = await fetchMs();
+        setMs(data);
+        if (data.status === "PUBLISHED") {
+          if (pollRef.current) clearInterval(pollRef.current);
+        }
+      } catch {
+        // transient — keep polling
+      }
+    }, 3000);
+  }, [fetchMs]);
+
+  const handlePayFee = useCallback(async () => {
+    if (!ms) return;
+    setPayError(null);
+    try {
+      const { txHash } = await payPublicationFee(ms.ms_id, (step) => setPayStep(step));
+      addToast("Payment confirmed — minting DOI and publishing…", "success");
+      setPayStep(null);
+      // Reflect the tx immediately, then poll for the indexer to catch up.
+      setMs((prev) => (prev ? { ...prev, status: "PUBLISHED" } : prev));
+      void txHash;
+      startPolling();
+    } catch (err: unknown) {
+      const msg =
+        (err as { shortMessage?: string })?.shortMessage ??
+        (err as { message?: string })?.message ??
+        "Transaction failed. Please try again.";
+      if (msg.includes("User rejected") || msg.includes("user rejected") || msg.includes("User denied")) {
+        setPayError("Transaction cancelled.");
+      } else {
+        setPayError(msg);
+      }
+      setPayStep(null);
+    }
+  }, [ms, addToast, startPolling]);
 
   if (loading) {
     return (
@@ -329,6 +386,101 @@ export default function ManuscriptDetailPage() {
         <h2 className="text-lg font-bold text-gray-900 mb-6">Publication Progress</h2>
         <ManuscriptStepper status={ms.status} />
       </div>
+
+      {/* Pay publication fee → publish (author action, status ACCEPTED) */}
+      {ms.status === "ACCEPTED" && (
+        <div className="bg-white border-2 border-green-200 rounded-3xl p-8 shadow-sm">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center flex-shrink-0">
+              <Award className="w-5 h-5 text-green-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Accepted — Ready to Publish</h2>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Pay the publication fee of{" "}
+                <span className="font-semibold text-gray-700">
+                  {(PUBLICATION_FEE / 10n ** 18n).toString()} JRT
+                </span>{" "}
+                from your wallet. This mints your DOI NFT, pays the reviewers, and publishes the manuscript on-chain.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 text-sm text-gray-600 mb-5">
+            <p className="flex items-center gap-2">
+              <Wallet className="w-4 h-4 text-gray-400" />
+              You will be asked to confirm <strong>two</strong> transactions in MetaMask: first an{" "}
+              <strong>approval</strong> for the fee, then the <strong>payment</strong>. Connect with the author wallet{" "}
+              <span className="font-mono text-xs">{truncateAddr(ms.author_address)}</span>.
+            </p>
+          </div>
+
+          {payError && (
+            <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 mb-4">
+              <XCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              {payError}
+            </div>
+          )}
+
+          <button
+            onClick={handlePayFee}
+            disabled={payStep !== null}
+            className="inline-flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+          >
+            {payStep === "approving" ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /><span>Approving Tokens…</span></>
+            ) : payStep === "publishing" ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /><span>Publishing…</span></>
+            ) : (
+              <><Award className="w-4 h-4" /><span>Pay Publication Fee &amp; Publish</span></>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Published — DOI + NFT (status PUBLISHED) */}
+      {ms.status === "PUBLISHED" && ms.doi && (
+        <div className="bg-gradient-to-br from-indigo-50 to-white border-2 border-indigo-200 rounded-3xl p-8 shadow-sm">
+          <div className="flex items-start gap-3 mb-5">
+            <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center flex-shrink-0">
+              <CheckCircle2 className="w-5 h-5 text-indigo-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Published</h2>
+              <p className="text-sm text-gray-500 mt-0.5">
+                This manuscript has been published on-chain and a DOI NFT was minted to the author.
+              </p>
+            </div>
+          </div>
+
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4 text-sm">
+            <div>
+              <dt className="text-gray-400 font-medium">DOI</dt>
+              <dd className="text-gray-800 font-mono text-sm mt-0.5">{ms.doi}</dd>
+            </div>
+            <div>
+              <dt className="text-gray-400 font-medium">DOI Token ID (NFT)</dt>
+              <dd className="text-gray-800 font-mono text-sm mt-0.5">
+                {ms.doi_token_id !== null ? `#${ms.doi_token_id}` : "—"}
+              </dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-gray-400 font-medium">Token metadata (IPFS)</dt>
+              <dd className="mt-0.5">
+                <a
+                  href={`https://ipfs.io/ipfs/${ms.cid}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-mono text-xs"
+                >
+                  ipfs://{ms.cid.slice(0, 20)}…?doi={ms.doi}
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </dd>
+            </div>
+          </dl>
+        </div>
+      )}
 
       {/* Plagiarism check */}
       {ms.plagiarism_requests.length > 0 && (

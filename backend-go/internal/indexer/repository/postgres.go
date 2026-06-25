@@ -81,8 +81,11 @@ func (r *PostgresIndexerRepository) UpdateManuscriptCID(ctx context.Context, tx 
 }
 
 func (r *PostgresIndexerRepository) UpdateManuscriptDOI(ctx context.Context, tx *sql.Tx, msId uint64, doi string, doiTokenId uint64) error {
+	// COALESCE(NULLIF($1,''), doi) preserves an already-set doi when called with an
+	// empty string (DOIMinted carries only the token id; DOIRegistered carries the doi).
+	// This makes the update independent of the order the two events are processed.
 	_, err := tx.ExecContext(ctx,
-		`UPDATE manuscripts SET doi = $1, doi_token_id = $2, updated_at = NOW() WHERE ms_id = $3`,
+		`UPDATE manuscripts SET doi = COALESCE(NULLIF($1, ''), doi), doi_token_id = $2, updated_at = NOW() WHERE ms_id = $3`,
 		doi, doiTokenId, msId,
 	)
 	return err
