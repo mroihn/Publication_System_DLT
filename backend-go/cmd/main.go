@@ -37,6 +37,7 @@ func main() {
 	// Infrastructure
 	userRepo := repository.NewPostgresUserRepository(db)
 	msReader := repository.NewPostgresManuscriptReader(db)
+	sessionRepo := repository.NewPostgresSessionWalletRepository(db, userRepo)
 	pinata := service.NewPinataService(cfg.PinataJWT)
 	ethereum := service.NewEthereumService(cfg.RPCURL, cfg.OperatorPrivateKey, cfg.RegistryContractAddress)
 
@@ -47,7 +48,8 @@ func main() {
 
 	// HTTP handlers
 	authHandler := handler.NewAuthHandler(authUC)
-	manuscriptHandler := handler.NewManuscriptHandler(manuscriptUC)
+	manuscriptHandler := handler.NewManuscriptHandler(manuscriptUC, sessionRepo)
+	sessionHandler := handler.NewSessionHandler(sessionRepo, cfg.OracleSharedSecret)
 	userHandler := handler.NewUserHandler(userUC)
 
 	// Indexer (disabled if no registry address configured)
@@ -134,9 +136,15 @@ func main() {
 			manuscripts.GET("", manuscriptHandler.List)
 			manuscripts.GET("/:id", manuscriptHandler.GetByID)
 			manuscripts.POST("/upload/file", manuscriptHandler.UploadFile)
-			manuscripts.POST("/submit", manuscriptHandler.Submit)
+			manuscripts.POST("/submit", jwtMW, manuscriptHandler.Submit)
 			manuscripts.POST("/:id/reviews", manuscriptHandler.SubmitReview)
 		}
+
+		// Oracle → backend: mint reviewer burner wallets (shared-secret guarded).
+		v1.POST("/internal/reviewer-sessions", sessionHandler.CreateReviewerSessions)
+
+		// Reviewer fetches their burner session wallets to sign reviews.
+		v1.GET("/reviewer/assignments", jwtMW, sessionHandler.GetAssignments)
 	}
 
 	addr := "0.0.0.0:" + cfg.Port

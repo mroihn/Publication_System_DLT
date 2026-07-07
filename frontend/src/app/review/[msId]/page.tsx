@@ -15,7 +15,14 @@ import {
   XCircle,
 } from "lucide-react";
 import { apiClient } from "@/core/services/api.client";
-import { getWalletClient, getNonce, DOMAIN } from "@/core/services/wallet";
+import { getNonce, signTypedDataWith } from "@/core/services/wallet";
+
+interface ReviewerAssignment {
+  ms_id: number;
+  status: string;
+  session_address: string;
+  session_privkey: string;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -187,13 +194,21 @@ export default function ReviewManuscriptPage() {
     reviewCountAtSubmit.current = ms?.reviews.length ?? 0;
 
     try {
-      // Sign the review with MetaMask before relaying to backend
+      // Fetch this reviewer's anonymous session wallet for this manuscript and sign
+      // with it — the author never learns the reviewer's real identity. No MetaMask.
       setSigning(true);
-      const { client, account } = await getWalletClient();
-      const nonce = await getNonce(account);
-      const signature = await client.signTypedData({
-        domain: DOMAIN,
-        types: {
+      const assignments = await apiClient.get<{ data: ReviewerAssignment[] }>(
+        "/reviewer/assignments"
+      );
+      const session = assignments.data.data.find((s) => s.ms_id === Number(msId));
+      if (!session) {
+        throw new Error("No anonymous reviewer wallet is assigned to you for this manuscript.");
+      }
+
+      const nonce = await getNonce(session.session_address as `0x${string}`);
+      const signature = await signTypedDataWith(
+        session.session_privkey as `0x${string}`,
+        {
           SubmitReview: [
             { name: "msId", type: "uint256" },
             { name: "comments", type: "string" },
@@ -201,10 +216,9 @@ export default function ReviewManuscriptPage() {
             { name: "nonce", type: "uint256" },
           ],
         },
-        primaryType: "SubmitReview",
-        message: { msId: BigInt(msId), comments, verdict: verdict as number, nonce },
-        account,
-      });
+        "SubmitReview",
+        { msId: BigInt(msId), comments, verdict: verdict as number, nonce },
+      );
       setSigning(false);
 
       const res = await apiClient.post<{ tx_hash: string }>(
@@ -477,7 +491,7 @@ export default function ReviewManuscriptPage() {
           {/* Submit */}
           <div className="flex items-center justify-between gap-4">
             <p className="text-xs text-gray-400">
-              You will sign the review in MetaMask. The platform relayer submits it on-chain — no gas required from you.
+              Signed anonymously with your one-time reviewer wallet — the author never learns who you are. No MetaMask, no gas required.
             </p>
             <button
               type="submit"
@@ -485,7 +499,7 @@ export default function ReviewManuscriptPage() {
               className="flex-shrink-0 inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
             >
               {signing ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /><span>Sign in MetaMask…</span></>
+                <><Loader2 className="w-4 h-4 animate-spin" /><span>Signing anonymously…</span></>
               ) : submitting ? (
                 <><Loader2 className="w-4 h-4 animate-spin" /><span>Submitting…</span></>
               ) : (

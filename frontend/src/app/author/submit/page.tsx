@@ -6,7 +6,7 @@ import { useAuth } from "@/core/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/core/context/ToastContext";
 import { apiClient } from "@/core/services/api.client";
-import { getWalletClient, getNonce, DOMAIN } from "@/core/services/wallet";
+import { generateSessionWallet, saveSubmissionKey, signTypedDataWith, getNonce } from "@/core/services/wallet";
 
 export default function SubmitManuscriptPage() {
   const { isAuthenticated: isConnected, isLoading } = useAuth();
@@ -45,9 +45,9 @@ export default function SubmitManuscriptPage() {
   }
 
   const stepLabel: Record<typeof step, string> = {
-    form: "Submit to Network",
+    form: "Submit Anonymously",
     uploading: "Uploading to IPFS…",
-    signing: "Sign in MetaMask…",
+    signing: "Generating anonymous identity…",
     submitting: "Submitting on-chain…",
   };
 
@@ -68,27 +68,31 @@ export default function SubmitManuscriptPage() {
       );
       const cid = uploadRes.data.cid;
 
-      // Step 2: sign the CID + metadata with MetaMask (EIP-712)
+      // Step 2: generate an anonymous SubmissionWallet and sign with it (no MetaMask).
+      // On-chain the author becomes this random burner address, so reviewers can
+      // never link the manuscript to the real author. The private key stays in this
+      // browser (localStorage) and is later required to pay the publication fee.
       setStep("signing");
-      const { client, account } = await getWalletClient();
-      const nonce = await getNonce(account);
+      const { address: submissionAddress, privateKey } = generateSessionWallet();
+      saveSubmissionKey(submissionAddress, privateKey);
+
+      const nonce = await getNonce(submissionAddress);
       const metadata = JSON.stringify({ title, abstract });
 
-      const signature = await client.signTypedData({
-        domain: DOMAIN,
-        types: {
+      const signature = await signTypedDataWith(
+        privateKey,
+        {
           SubmitManuscript: [
             { name: "cid", type: "string" },
             { name: "metadata", type: "string" },
             { name: "nonce", type: "uint256" },
           ],
         },
-        primaryType: "SubmitManuscript",
-        message: { cid, metadata, nonce },
-        account,
-      });
+        "SubmitManuscript",
+        { cid, metadata, nonce },
+      );
 
-      // Step 3: submit signed data to backend → contract
+      // Step 3: submit signed data to backend → contract (backend relays + saves mapping)
       // metadata must be the exact string that was signed — do not reconstruct it
       setStep("submitting");
       await apiClient.post("/manuscripts/submit", {
@@ -96,6 +100,7 @@ export default function SubmitManuscriptPage() {
         metadata,
         signature,
         nonce: nonce.toString(),
+        submissionAddress,
       });
 
       addToast("Manuscript submitted to the blockchain!", "success");
@@ -128,7 +133,7 @@ export default function SubmitManuscriptPage() {
         </p>
         <p className="text-gray-500 text-sm mt-1 flex items-center gap-1">
           <PenLine className="w-4 h-4" />
-          Your MetaMask wallet will sign the submission — no gas required from you.
+          Submitted anonymously via a one-time wallet — reviewers cannot see who you are. No MetaMask signature needed.
         </p>
       </div>
 
@@ -182,7 +187,7 @@ export default function SubmitManuscriptPage() {
             <div className="w-4 h-4 border-2 border-indigo-400 border-t-indigo-800 rounded-full animate-spin flex-shrink-0" />
             <span>
               {step === "uploading" && "Uploading file to IPFS…"}
-              {step === "signing" && "Waiting for MetaMask signature…"}
+              {step === "signing" && "Generating your anonymous submission wallet…"}
               {step === "submitting" && "Submitting to the blockchain…"}
             </span>
           </div>

@@ -6,15 +6,18 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mroihn/ta-proj/backend-go/internal/domain"
+	"github.com/mroihn/ta-proj/backend-go/internal/repository"
 	"github.com/mroihn/ta-proj/backend-go/internal/usecase"
 )
 
 type ManuscriptHandler struct {
 	manuscriptUC *usecase.ManuscriptUseCase
+	sessionRepo  repository.SessionWalletRepository
 }
 
-func NewManuscriptHandler(manuscriptUC *usecase.ManuscriptUseCase) *ManuscriptHandler {
-	return &ManuscriptHandler{manuscriptUC: manuscriptUC}
+func NewManuscriptHandler(manuscriptUC *usecase.ManuscriptUseCase, sessionRepo repository.SessionWalletRepository) *ManuscriptHandler {
+	return &ManuscriptHandler{manuscriptUC: manuscriptUC, sessionRepo: sessionRepo}
 }
 
 func (h *ManuscriptHandler) List(c *gin.Context) {
@@ -70,22 +73,25 @@ func (h *ManuscriptHandler) UploadFile(c *gin.Context) {
 }
 
 type submitManuscriptRequest struct {
-	CID       string `json:"cid"`
-	Metadata  string `json:"metadata"` // exact JSON string that was EIP-712 signed
-	Signature string `json:"signature"` // 0x-prefixed 65-byte hex from MetaMask
-	Nonce     string `json:"nonce"`     // uint256 as decimal string (BigInt from JS)
+	CID               string `json:"cid"`
+	Metadata          string `json:"metadata"`          // exact JSON string that was EIP-712 signed
+	Signature         string `json:"signature"`         // 0x-prefixed 65-byte hex from the SubmissionWallet
+	Nonce             string `json:"nonce"`             // uint256 as decimal string (BigInt from JS)
+	SubmissionAddress string `json:"submissionAddress"` // burner SubmissionWallet public address
 }
 
-// Submit submits a signed manuscript to the smart contract.
-// Step 2 of the two-step EIP-712 submit flow.
+// Submit relays a signed manuscript to the smart contract and records the
+// off-chain UserID ↔ SubmissionWallet mapping for the double-blind flow.
 func (h *ManuscriptHandler) Submit(c *gin.Context) {
+	user := c.MustGet("user").(*domain.User)
+
 	var req submitManuscriptRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	if req.CID == "" || req.Metadata == "" || req.Signature == "" || req.Nonce == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "cid, metadata, signature, and nonce are required"})
+	if req.CID == "" || req.Metadata == "" || req.Signature == "" || req.Nonce == "" || req.SubmissionAddress == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "cid, metadata, signature, nonce, and submissionAddress are required"})
 		return
 	}
 
@@ -98,6 +104,13 @@ func (h *ManuscriptHandler) Submit(c *gin.Context) {
 	result, err := h.manuscriptUC.SubmitOnChain(req.CID, req.Metadata, req.Signature, nonce)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	// Record the anonymous author mapping (best-effort; the on-chain tx already succeeded).
+	if err := h.sessionRepo.SaveSubmissionWallet(user.ID, req.SubmissionAddress); err != nil {
+		c.JSON(http.StatusOK, gin.H{"cid": result.CID, "txHash": result.TxHash, "status": result.Status,
+			"warning": "submitted on-chain but failed to persist submission wallet mapping: " + err.Error()})
 		return
 	}
 

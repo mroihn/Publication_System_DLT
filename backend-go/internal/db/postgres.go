@@ -22,6 +22,9 @@ var migration003 string
 //go:embed migrations/004_review_cid.up.sql
 var migration004 string
 
+//go:embed migrations/005_session_wallets.up.sql
+var migration005 string
+
 func Open(cfg *config.Config) (*sql.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
@@ -41,7 +44,7 @@ func Open(cfg *config.Config) (*sql.DB, error) {
 }
 
 func RunMigrations(db *sql.DB) error {
-	for _, sql := range []string{migration001, migration002, migration003, migration004} {
+	for _, sql := range []string{migration001, migration002, migration003, migration004, migration005} {
 		if _, err := db.Exec(sql); err != nil {
 			return err
 		}

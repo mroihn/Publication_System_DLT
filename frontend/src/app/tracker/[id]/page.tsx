@@ -21,7 +21,7 @@ import {
 import { apiClient } from "@/core/services/api.client";
 import { ManuscriptStepper } from "@/components/ManuscriptStepper";
 import { useToast } from "@/core/context/ToastContext";
-import { payPublicationFee, PUBLICATION_FEE, type PayStep } from "@/core/services/wallet";
+import { fundAndPublish, getSubmissionKey, PUBLICATION_FEE, type PublishStep } from "@/core/services/wallet";
 
 interface Reviewer {
   reviewer_address: string;
@@ -224,7 +224,7 @@ export default function ManuscriptDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Pay-fee flow state
-  const [payStep, setPayStep] = useState<PayStep | null>(null);
+  const [payStep, setPayStep] = useState<PublishStep | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -268,8 +268,19 @@ export default function ManuscriptDetailPage() {
   const handlePayFee = useCallback(async () => {
     if (!ms) return;
     setPayError(null);
+
+    // The on-chain author IS the burner SubmissionWallet; its key lives only in the
+    // browser that submitted. Recover it to fund + pay from that same wallet.
+    const pk = getSubmissionKey(ms.author_address);
+    if (!pk) {
+      setPayError(
+        "Submission wallet key not found in this browser. Publishing must be done from the same device/browser used to submit this manuscript."
+      );
+      return;
+    }
+
     try {
-      const { txHash } = await payPublicationFee(ms.ms_id, (step) => setPayStep(step));
+      const { txHash } = await fundAndPublish(ms.ms_id, pk, (step) => setPayStep(step));
       addToast("Payment confirmed — minting DOI and publishing…", "success");
       setPayStep(null);
       // Reflect the tx immediately, then poll for the indexer to catch up.
@@ -408,10 +419,14 @@ export default function ManuscriptDetailPage() {
 
           <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 text-sm text-gray-600 mb-5">
             <p className="flex items-center gap-2">
-              <Wallet className="w-4 h-4 text-gray-400" />
-              You will be asked to confirm <strong>two</strong> transactions in MetaMask: first an{" "}
-              <strong>approval</strong> for the fee, then the <strong>payment</strong>. Connect with the author wallet{" "}
-              <span className="font-mono text-xs">{truncateAddr(ms.author_address)}</span>.
+              <Wallet className="w-4 h-4 text-gray-400 flex-shrink-0" />
+              <span>
+                Because you submitted anonymously, the on-chain author is your one-time wallet{" "}
+                <span className="font-mono text-xs">{truncateAddr(ms.author_address)}</span>. MetaMask
+                will first fund it with <strong>100 JRT + a little gas</strong> from your main wallet,
+                then that wallet pays the fee itself. Publishing must be done from the same browser you
+                submitted with.
+              </span>
             </p>
           </div>
 
@@ -427,12 +442,16 @@ export default function ManuscriptDetailPage() {
             disabled={payStep !== null}
             className="inline-flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
           >
-            {payStep === "approving" ? (
+            {payStep === "funding-jrt" ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /><span>Sending 100 JRT to your submission wallet…</span></>
+            ) : payStep === "funding-gas" ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /><span>Sending gas…</span></>
+            ) : payStep === "approving" ? (
               <><Loader2 className="w-4 h-4 animate-spin" /><span>Approving Tokens…</span></>
             ) : payStep === "publishing" ? (
               <><Loader2 className="w-4 h-4 animate-spin" /><span>Publishing…</span></>
             ) : (
-              <><Award className="w-4 h-4" /><span>Pay Publication Fee &amp; Publish</span></>
+              <><Award className="w-4 h-4" /><span>Fund &amp; Publish</span></>
             )}
           </button>
         </div>

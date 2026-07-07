@@ -41,6 +41,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - DB_NAME=${DB_NAME:-publish_db}
       - JWT_SECRET=${JWT_SECRET:-supersecret}
+      - ORACLE_SHARED_SECRET=${ORACLE_SHARED_SECRET:-oracle-dev-secret}
     ports:
       - "3001:3001"
     depends_on:
@@ -72,6 +73,11 @@ services:
     container_name: publishing_oracle
     env_file:
       - ./oracle/.env
+    environment:
+      - BACKEND_URL=http://backend:3001
+      - ORACLE_SHARED_SECRET=${ORACLE_SHARED_SECRET:-oracle-dev-secret}
+    depends_on:
+      - backend
     restart: unless-stopped
     networks:
       - publishing-network

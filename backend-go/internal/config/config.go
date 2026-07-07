@@ -12,6 +12,7 @@ type Config struct {
 	OperatorPrivateKey      string
 	RPCURL                  string
 	RegistryContractAddress string
+	OracleSharedSecret      string
 
 	DBHost     string
 	DBPort     string
@@ -35,6 +36,7 @@ func Load() *Config {
 		OperatorPrivateKey:      getEnv("OPERATOR_PRIVATE_KEY", ""),
 		RPCURL:                  getEnv("RPC_URL", "http://127.0.0.1:8545"),
 		RegistryContractAddress: getEnv("REGISTRY_CONTRACT_ADDRESS", "0x0000000000000000000000000000000000000000"),
+		OracleSharedSecret:      getEnv("ORACLE_SHARED_SECRET", ""),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
