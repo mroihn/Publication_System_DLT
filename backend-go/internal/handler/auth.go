@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,23 +20,34 @@ func NewAuthHandler(authUC *usecase.AuthUseCase) *AuthHandler {
 
 func (h *AuthHandler) Register(c *gin.Context) {
 	var body struct {
-		Email    string `json:"email" binding:"required"`
-		Password string `json:"password" binding:"required"`
+		Email        string   `json:"email" binding:"required"`
+		Password     string   `json:"password" binding:"required"`
+		Role         string   `json:"role"`
+		Specialities []string `json:"specialities"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 
-	user, err := h.authUC.Register(body.Email, body.Password)
+	user, err := h.authUC.Register(body.Email, body.Password, body.Role, body.Specialities)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"message": err.Error()})
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "already registered") {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"message": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "User registered successfully",
-		"user":    gin.H{"id": user.ID, "email": user.Email},
+		"user": gin.H{
+			"id":           user.ID,
+			"email":        user.Email,
+			"role":         user.Role,
+			"specialities": user.Specialities,
+		},
 	})
 }
 
@@ -61,6 +73,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"id":            result.User.ID,
 			"email":         result.User.Email,
 			"walletAddress": result.User.WalletAddress,
+			"role":          result.User.Role,
+			"specialities":  result.User.Specialities,
 		},
 	})
 }
@@ -82,5 +96,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		"id":            user.ID,
 		"email":         user.Email,
 		"walletAddress": user.WalletAddress,
+		"role":          user.Role,
+		"specialities":  user.Specialities,
 	})
 }

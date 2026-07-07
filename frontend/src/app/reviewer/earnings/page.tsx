@@ -49,33 +49,30 @@ export default function ReviewerEarningsPage() {
     setBalances(Object.fromEntries(entries));
   }, []);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await apiClient.get<{ data: ReviewerAssignment[] }>("/reviewer/assignments");
-      // De-duplicate by session wallet.
-      const seen = new Set<string>();
-      const unique = res.data.data.filter((a) => {
-        if (seen.has(a.session_address)) return false;
-        seen.add(a.session_address);
-        return true;
-      });
-      setAssignments(unique);
-      await loadBalances(unique);
-    } catch {
-      addToast("Failed to load your reviewer earnings.", "error");
-    } finally {
-      setLoading(false);
-    }
-  }, [addToast, loadBalances]);
-
   useEffect(() => {
     if (isLoading) return;
     if (!isAuthenticated) {
       router.push("/login");
       return;
     }
-    load();
-  }, [isAuthenticated, isLoading, router, load]);
+    // setState is kept inside the promise callbacks (not called synchronously in
+    // the effect body) to satisfy the react-hooks/set-state-in-effect rule.
+    apiClient
+      .get<{ data: ReviewerAssignment[] }>("/reviewer/assignments")
+      .then((res) => {
+        // De-duplicate by session wallet.
+        const seen = new Set<string>();
+        const unique = res.data.data.filter((a) => {
+          if (seen.has(a.session_address)) return false;
+          seen.add(a.session_address);
+          return true;
+        });
+        setAssignments(unique);
+        return loadBalances(unique);
+      })
+      .catch(() => addToast("Failed to load your reviewer earnings.", "error"))
+      .finally(() => setLoading(false));
+  }, [isAuthenticated, isLoading, router, addToast, loadBalances]);
 
   const handleWithdraw = useCallback(
     async (a: ReviewerAssignment) => {

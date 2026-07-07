@@ -5,4 +5,6 @@ type User struct {
 	Email         string
 	Password      string
 	WalletAddress string
+	Role          string
+	Specialities  []string
 }

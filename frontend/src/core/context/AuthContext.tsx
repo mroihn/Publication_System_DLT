@@ -7,6 +7,8 @@ interface User {
   id: string;
   email: string;
   walletAddress?: string;
+  role?: string;
+  specialities?: string[];
 }
 
 interface AuthContextType {

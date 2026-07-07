@@ -6,11 +6,27 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useToast } from '@/core/context/ToastContext';
 
+const SPECIALITIES: { slug: string; label: string }[] = [
+  { slug: 'ai', label: 'AI' },
+  { slug: 'computer-security', label: 'Computer Security' },
+  { slug: 'blockchain', label: 'Blockchain' },
+  { slug: 'cloud-computing', label: 'Cloud Computing' },
+  { slug: 'data-science', label: 'Data Science' },
+];
+
 export default function RegisterForm() {
   const router = useRouter();
   const { addToast } = useToast();
   const [form, setForm] = useState({ email: '', password: '', confirmPassword: '' });
+  const [role, setRole] = useState<'user' | 'reviewer'>('user');
+  const [specialities, setSpecialities] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  const toggleSpeciality = (slug: string) => {
+    setSpecialities((prev) =>
+      prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]
+    );
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,8 +34,16 @@ export default function RegisterForm() {
     if (form.password !== form.confirmPassword) {
       return setError('Passwords do not match');
     }
+    if (role === 'reviewer' && specialities.length === 0) {
+      return setError('Please select at least one speciality');
+    }
     try {
-      await apiClient.post('/auth/register', { email: form.email, password: form.password });
+      await apiClient.post('/auth/register', {
+        email: form.email,
+        password: form.password,
+        role,
+        specialities: role === 'reviewer' ? specialities : [],
+      });
       addToast('Registration successful! Please login.', 'success');
       router.push('/login');
     } catch (err: unknown) {
@@ -42,6 +66,60 @@ export default function RegisterForm() {
           </div>
         )}
         
+        <div className="flex flex-col gap-2">
+          <label className="text-sm font-medium text-gray-700">I am registering as a</label>
+          <div className="grid grid-cols-2 gap-3">
+            {([
+              { value: 'user', title: 'Researcher', sub: 'Submit & publish manuscripts' },
+              { value: 'reviewer', title: 'Reviewer', sub: 'Peer-review submissions' },
+            ] as const).map((opt) => {
+              const active = role === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setRole(opt.value)}
+                  className={`flex flex-col items-start gap-0.5 p-3 rounded-lg border-2 text-left transition-all ${
+                    active
+                      ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <span className="text-sm font-semibold text-gray-900">{opt.title}</span>
+                  <span className="text-xs text-gray-500">{opt.sub}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {role === 'reviewer' && (
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-gray-700">
+              Speciality <span className="text-gray-400 font-normal">(select one or more)</span>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {SPECIALITIES.map((s) => {
+                const active = specialities.includes(s.slug);
+                return (
+                  <button
+                    key={s.slug}
+                    type="button"
+                    onClick={() => toggleSpeciality(s.slug)}
+                    className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                      active
+                        ? 'bg-indigo-600 border-indigo-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-700 hover:border-indigo-400'
+                    }`}
+                  >
+                    {active ? '✓ ' : ''}{s.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col gap-1">
           <label htmlFor="email" className="text-sm font-medium text-gray-700">Email Address</label>
           <input 
