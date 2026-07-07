@@ -91,6 +91,14 @@ func (r *PostgresIndexerRepository) UpdateManuscriptDOI(ctx context.Context, tx 
 	return err
 }
 
+func (r *PostgresIndexerRepository) UpdateManuscriptField(ctx context.Context, tx *sql.Tx, msId uint64, field string) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE manuscripts SET field = $1, updated_at = NOW() WHERE ms_id = $2`,
+		field, msId,
+	)
+	return err
+}
+
 func (r *PostgresIndexerRepository) IncrementVerdictCount(ctx context.Context, tx *sql.Tx, msId uint64, verdict string) error {
 	col := ""
 	switch verdict {

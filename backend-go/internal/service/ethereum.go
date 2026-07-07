@@ -24,6 +24,8 @@ const (
 	registryABIJSON = `[
 		{"inputs":[{"name":"cid","type":"string"},{"name":"metadata","type":"string"},{"name":"nonce","type":"uint256"},{"name":"v","type":"uint8"},{"name":"r","type":"bytes32"},{"name":"s","type":"bytes32"}],"name":"submitManuscript","outputs":[{"name":"","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},
 		{"inputs":[{"name":"msId","type":"uint256"},{"name":"reviewCid","type":"string"},{"name":"verdict","type":"uint8"},{"name":"comments","type":"string"},{"name":"nonce","type":"uint256"},{"name":"v","type":"uint8"},{"name":"r","type":"bytes32"},{"name":"s","type":"bytes32"}],"name":"submitReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
+		{"inputs":[{"name":"msId","type":"uint256"},{"name":"approve","type":"bool"},{"name":"field","type":"string"},{"name":"editorCid","type":"string"}],"name":"submitEditorReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
+		{"inputs":[{"name":"reviewer","type":"address"},{"name":"fields","type":"string[]"}],"name":"verifyReviewerFields","outputs":[],"stateMutability":"nonpayable","type":"function"},
 
 		{"type":"error","name":"InvalidState","inputs":[{"name":"msId","type":"uint256"},{"name":"expected","type":"uint8"},{"name":"actual","type":"uint8"}]},
 		{"type":"error","name":"NotAuthor","inputs":[{"name":"msId","type":"uint256"},{"name":"caller","type":"address"}]},
@@ -247,5 +249,25 @@ func (s *EthereumService) SubmitReview(msId uint64, reviewCid, comments, signatu
 		comments,
 		new(big.Int).SetUint64(nonce),
 		v, r, sv,
+	)
+}
+
+// SubmitEditorReview relays an editor's screening decision. approve → assign field,
+// move to UNDER_REVIEW and request reviewers; !approve → desk-reject.
+func (s *EthereumService) SubmitEditorReview(msId uint64, approve bool, field, editorCid string) (string, error) {
+	return s.sendTx("submitEditorReview",
+		new(big.Int).SetUint64(msId),
+		approve,
+		field,
+		editorCid,
+	)
+}
+
+// VerifyReviewerFields relays a reviewer's editor-verified subject fields on-chain
+// (overwrites the previous set — latest wins).
+func (s *EthereumService) VerifyReviewerFields(reviewerAddr string, fields []string) (string, error) {
+	return s.sendTx("verifyReviewerFields",
+		common.HexToAddress(reviewerAddr),
+		fields,
 	)
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mroihn/ta-proj/backend-go/internal/domain"
@@ -18,13 +19,14 @@ func NewSessionHandler(sessionRepo repository.SessionWalletRepository, oracleSec
 }
 
 type createReviewerSessionsRequest struct {
-	MsID      uint64                           `json:"msId"`
-	Reviewers []repository.ReviewerSessionSeed `json:"reviewers"`
+	MsID  uint64 `json:"msId"`
+	Field string `json:"field"`
+	Count int    `json:"count"` // optional; defaults to 3 (odd ≥ 3 for majority)
 }
 
 // CreateReviewerSessions is called by the oracle (guarded by X-Oracle-Secret).
-// It mints one burner wallet per selected reviewer and returns the burner
-// addresses in the same order so the oracle can submit them on-chain.
+// It selects verified reviewers matching the manuscript's field, mints a burner
+// wallet per reviewer, and returns the burner addresses to assign on-chain.
 func (h *SessionHandler) CreateReviewerSessions(c *gin.Context) {
 	if h.oracleSecret == "" || c.GetHeader("X-Oracle-Secret") != h.oracleSecret {
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "invalid oracle secret"})
@@ -36,14 +38,27 @@ func (h *SessionHandler) CreateReviewerSessions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	if req.MsID == 0 || len(req.Reviewers) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "msId and reviewers are required"})
+	if req.Field == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "field is required"})
 		return
 	}
+	count := req.Count
+	if count <= 0 {
+		count = 3
+	}
 
-	sessions, err := h.sessionRepo.CreateReviewerSessions(req.MsID, req.Reviewers)
+	sessions, err := h.sessionRepo.CreateReviewerSessionsForField(req.MsID, req.Field, count)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	// The contract requires an odd count ≥ 3; surface a clear error if the field
+	// doesn't have enough verified reviewers rather than letting the tx revert.
+	if len(sessions) < 3 {
+		c.JSON(http.StatusConflict, gin.H{
+			"message": "not enough verified reviewers for field '" + req.Field + "' (need ≥3 with bound wallets, found " +
+				strconv.Itoa(len(sessions)) + ")",
+		})
 		return
 	}
 

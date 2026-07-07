@@ -19,6 +19,7 @@ type IndexerRepository interface {
 	UpdateManuscriptStatus(ctx context.Context, tx *sql.Tx, msId uint64, status string) error
 	UpdateManuscriptCID(ctx context.Context, tx *sql.Tx, msId uint64, newCid string, version uint64) error
 	UpdateManuscriptDOI(ctx context.Context, tx *sql.Tx, msId uint64, doi string, doiTokenId uint64) error
+	UpdateManuscriptField(ctx context.Context, tx *sql.Tx, msId uint64, field string) error
 	IncrementVerdictCount(ctx context.Context, tx *sql.Tx, msId uint64, verdict string) error
 	SetReviewers(ctx context.Context, tx *sql.Tx, msId uint64, reviewers []string) error
 	InsertReview(ctx context.Context, tx *sql.Tx, review ReviewRow) error

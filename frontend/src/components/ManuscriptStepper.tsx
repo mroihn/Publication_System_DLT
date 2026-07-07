@@ -2,7 +2,7 @@
 
 import { CheckCircle2, Clock, XCircle } from "lucide-react";
 
-const STEPS = ["CHECKING", "UNDER_REVIEW", "ACCEPTED", "PUBLISHED"];
+const STEPS = ["CHECKING", "PENDING_EDITOR", "UNDER_REVIEW", "ACCEPTED", "PUBLISHED"];
 
 function stepStatus(currentStatus: string, step: string): "past" | "current" | "upcoming" | "skipped" {
   if (currentStatus === "REJECTED") return "past";

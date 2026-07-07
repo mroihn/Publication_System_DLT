@@ -9,6 +9,7 @@ interface User {
   walletAddress?: string;
   role?: string;
   specialities?: string[];
+  verifiedFields?: string[];
 }
 
 interface AuthContextType {

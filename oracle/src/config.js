@@ -14,6 +14,7 @@ module.exports = {
   RPC_HTTP:      process.env.SEPOLIA_RPC_URL || "https://rpc.ankr.com/eth_sepolia",
   ORACLE_KEY:    process.env.ORACLE_PRIVATE_KEY,
   ORACLE_ADDR:   process.env.REVIEW_ORACLE_ADDRESS,
+  REGISTRY_ADDR: process.env.REGISTRY_ADDRESS || process.env.REGISTRY_CONTRACT_ADDRESS || "",
   POLL_INTERVAL: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
   BACKEND_URL:   process.env.BACKEND_URL || "http://backend:3001",
   ORACLE_SECRET: process.env.ORACLE_SHARED_SECRET || "",

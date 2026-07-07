@@ -19,7 +19,7 @@ export default function LoginForm() {
     try {
       const { data } = await apiClient.post('/auth/login', { email, password });
       login(data.accessToken, data.user);
-      router.push('/profile');
+      router.push(data.user?.role === 'editor' ? '/editor' : '/profile');
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } };
       setError(e.response?.data?.message || 'Invalid credentials');

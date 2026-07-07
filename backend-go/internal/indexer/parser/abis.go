@@ -9,7 +9,9 @@ const RegistryABI = `[
   {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":false,"name":"newCid","type":"string"},{"indexed":false,"name":"version","type":"uint256"}],"name":"ManuscriptRevised","type":"event"},
   {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":true,"name":"author","type":"address"},{"indexed":false,"name":"cid","type":"string"}],"name":"ManuscriptSubmitted","type":"event"},
   {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":true,"name":"reviewer","type":"address"},{"indexed":false,"name":"verdict","type":"uint8"},{"indexed":false,"name":"reviewCid","type":"string"}],"name":"ReviewSubmitted","type":"event"},
-  {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":false,"name":"reviewers","type":"address[]"}],"name":"ReviewersAssigned","type":"event"}
+  {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":false,"name":"reviewers","type":"address[]"}],"name":"ReviewersAssigned","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":true,"name":"msId","type":"uint256"},{"indexed":false,"name":"approved","type":"bool"},{"indexed":false,"name":"field","type":"string"},{"indexed":false,"name":"editorCid","type":"string"}],"name":"EditorReviewed","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":true,"name":"reviewer","type":"address"},{"indexed":false,"name":"fields","type":"string[]"}],"name":"ReviewerFieldsVerified","type":"event"}
 ]`
 
 // OracleABI contains only the event entries from ReviewOracle.
@@ -33,6 +35,7 @@ var StatusNames = map[uint8]string{
 	4: "ACCEPTED",
 	5: "REJECTED",
 	6: "PUBLISHED",
+	7: "PENDING_EDITOR",
 }
 
 var VerdictNames = map[uint8]string{

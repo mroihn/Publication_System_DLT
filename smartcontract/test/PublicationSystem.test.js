@@ -38,7 +38,12 @@ describe("Publication System", function () {
     ACCEPTED: 4,
     REJECTED: 5,
     PUBLISHED: 6,
+    PENDING_EDITOR: 7,
   };
+
+  // Editor screening constants (plagiarism pass now waits for editor approval)
+  const FIELD = "ai";
+  const EDITOR_CID = "QmEditorReviewCID";
 
   // Verdict enum values — must match Solidity: ACCEPT=0, REJECT=1, REVISE=2
   const Verdict = {
@@ -284,7 +289,7 @@ describe("Publication System", function () {
       expect(ms.version).to.equal(1);
     });
 
-    it("should transition CHECKING → UNDER_REVIEW on plagiarism pass", async function () {
+    it("should transition CHECKING → PENDING_EDITOR on plagiarism pass", async function () {
       const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, nonce, v, r, s);
 
@@ -292,11 +297,58 @@ describe("Publication System", function () {
 
       await expect(tx)
         .to.emit(mockOracleRegistry, "DecisionMade")
+        .withArgs(0, Status.PENDING_EDITOR);
+
+      const ms = await mockOracleRegistry.getManuscript(0);
+      expect(ms.status).to.equal(Status.PENDING_EDITOR);
+      expect(ms.plagiarismScore).to.equal(15);
+    });
+
+    it("should transition PENDING_EDITOR → UNDER_REVIEW on editor approval and assign the field", async function () {
+      const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, nonce, v, r, s);
+      await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 15);
+
+      const tx = await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
+      await expect(tx)
+        .to.emit(mockOracleRegistry, "EditorReviewed")
+        .withArgs(0, true, FIELD, EDITOR_CID);
+      await expect(tx)
+        .to.emit(mockOracleRegistry, "DecisionMade")
         .withArgs(0, Status.UNDER_REVIEW);
 
       const ms = await mockOracleRegistry.getManuscript(0);
       expect(ms.status).to.equal(Status.UNDER_REVIEW);
-      expect(ms.plagiarismScore).to.equal(15);
+      expect(ms.field).to.equal(FIELD);
+      expect(await mockOracleRegistry.getField(0)).to.equal(FIELD);
+    });
+
+    it("should desk-reject a manuscript when the editor rejects", async function () {
+      const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
+      await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, nonce, v, r, s);
+      await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 15);
+
+      const tx = await mockOracleRegistry.connect(admin).submitEditorReview(0, false, FIELD, EDITOR_CID);
+      await expect(tx)
+        .to.emit(mockOracleRegistry, "DecisionMade")
+        .withArgs(0, Status.REJECTED);
+
+      const ms = await mockOracleRegistry.getManuscript(0);
+      expect(ms.status).to.equal(Status.REJECTED);
+    });
+
+    it("should record editor-verified reviewer fields on-chain", async function () {
+      const fields = ["ai", "blockchain"];
+      const tx = await mockOracleRegistry.connect(admin).verifyReviewerFields(reviewer1.address, fields);
+      await expect(tx)
+        .to.emit(mockOracleRegistry, "ReviewerFieldsVerified")
+        .withArgs(reviewer1.address, fields);
+
+      expect(await mockOracleRegistry.getVerifiedFields(reviewer1.address)).to.deep.equal(fields);
+
+      // Latest verification overwrites the previous set
+      await mockOracleRegistry.connect(admin).verifyReviewerFields(reviewer1.address, ["data-science"]);
+      expect(await mockOracleRegistry.getVerifiedFields(reviewer1.address)).to.deep.equal(["data-science"]);
     });
 
     it("should transition CHECKING → REJECTED on plagiarism fail", async function () {
@@ -317,6 +369,7 @@ describe("Publication System", function () {
       const { nonce, v, r, s } = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, nonce, v, r, s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
 
       const reviewers = [reviewer1.address, reviewer2.address, reviewer3.address];
       const tx = await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, reviewers);
@@ -333,6 +386,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address, reviewer3.address,
       ]);
@@ -356,6 +410,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address, reviewer3.address,
       ]);
@@ -377,6 +432,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address, reviewer3.address,
       ]);
@@ -398,6 +454,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address, reviewer3.address,
       ]);
@@ -416,6 +473,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       // Only assign reviewer1 and reviewer2
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address,
@@ -432,6 +490,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 10);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address, reviewer3.address,
       ]);
@@ -466,6 +525,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 5);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address, reviewer3.address,
       ]);
@@ -506,6 +566,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 5);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address, reviewer3.address,
       ]);
@@ -530,6 +591,7 @@ describe("Publication System", function () {
       const msData = await signMs(researcher, CID, METADATA);
       await mockOracleRegistry.connect(admin).submitManuscript(CID, METADATA, msData.nonce, msData.v, msData.r, msData.s);
       await mockOracleRegistry.connect(admin).fulfillPlagiarism(0, 5);
+      await mockOracleRegistry.connect(admin).submitEditorReview(0, true, FIELD, EDITOR_CID);
       await mockOracleRegistry.connect(admin).fulfillRandomReviewers(0, [
         reviewer1.address, reviewer2.address, reviewer3.address,
       ]);

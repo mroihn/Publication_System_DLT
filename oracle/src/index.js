@@ -1,10 +1,14 @@
 const { ethers } = require("ethers");
-const { ORACLE_KEY, ORACLE_ADDR } = require("./config");
+const { ORACLE_KEY, ORACLE_ADDR, REGISTRY_ADDR } = require("./config");
 const { createProvider } = require("./provider");
-const { COMPETENCY, REVIEWER_REGISTRY, NUM_REVIEWERS } = require("./registry");
 const { handlePlagiarismRequest } = require("./handlers/plagiarism");
 const { handleReviewerSelection } = require("./handlers/reviewer");
 const ORACLE_ABI = require("./abi/ReviewOracle.json");
+
+// Minimal read-only ABI to fetch the editor-assigned field for a manuscript.
+const REGISTRY_READ_ABI = [
+  "function getField(uint256 msId) view returns (string)",
+];
 
 async function main() {
   console.log("═══════════════════════════════════════════════════════");
@@ -16,19 +20,17 @@ async function main() {
   const wallet   = new ethers.NonceManager(baseWallet);
   const contract = new ethers.Contract(ORACLE_ADDR, ORACLE_ABI, wallet);
 
+  // Read-only registry handle used to fetch the editor-assigned field per manuscript.
+  const registry = REGISTRY_ADDR
+    ? new ethers.Contract(REGISTRY_ADDR, REGISTRY_READ_ABI, provider)
+    : null;
+
   const operatorAddress = await wallet.getAddress();
 
   console.log(`[Oracle]   Operator address : ${operatorAddress}`);
   console.log(`[Oracle]   ReviewOracle     : ${ORACLE_ADDR}`);
-  console.log(`[Oracle]   NUM_REVIEWERS    : ${NUM_REVIEWERS} (must be odd ≥ 3)\n`);
-
-  console.log("[Registry] Hardcoded reviewer registry:");
-  const byTier = { [COMPETENCY.HIGH]: [], [COMPETENCY.MEDIUM]: [], [COMPETENCY.LOW]: [] };
-  for (const r of REVIEWER_REGISTRY) byTier[r.competency].push(r);
-  for (const [tier, list] of Object.entries(byTier)) {
-    console.log(`  ${tier.toUpperCase().padEnd(6)} (${list.length}): ${list.map(r => r.name).join(", ")}`);
-  }
-  console.log();
+  console.log(`[Oracle]   Registry         : ${REGISTRY_ADDR || "(not set — field lookup disabled)"}`);
+  console.log("[Oracle]   Reviewer selection: field-based via backend\n");
 
   const balance = await provider.getBalance(operatorAddress);
   console.log(`[Oracle]   Balance          : ${ethers.formatEther(balance)} ETH\n`);
@@ -46,7 +48,14 @@ async function main() {
   console.log("[Listen]  Subscribing to ReviewerSelectionRequested events...\n");
   contract.on("ReviewerSelectionRequested", async (requestId, msId) => {
     await wallet.reset();
-    handleReviewerSelection(contract, requestId, msId).catch(console.error);
+    // Look up the editor-assigned field so the backend can pick matching reviewers.
+    let field = "";
+    try {
+      if (registry) field = await registry.getField(msId);
+    } catch (err) {
+      console.error(`[Reviewer][Error] getField(${msId}) failed:`, err.message);
+    }
+    handleReviewerSelection(contract, requestId, msId, field).catch(console.error);
   });
 
   console.log("[Ready]   Oracle operator is running. Press Ctrl+C to stop.\n");

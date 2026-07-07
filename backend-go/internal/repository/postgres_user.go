@@ -17,13 +17,13 @@ func NewPostgresUserRepository(db *sql.DB) *PostgresUserRepository {
 	return &PostgresUserRepository{db: db}
 }
 
-const userSelectCols = `id, email, password_hash, wallet_address, role, specialities`
+const userSelectCols = `id, email, password_hash, wallet_address, role, specialities, verified_fields`
 
 // scanUser reads a single user row selected with userSelectCols.
 func scanUser(row *sql.Row) (*domain.User, error) {
 	u := &domain.User{}
 	var wallet sql.NullString
-	err := row.Scan(&u.ID, &u.Email, &u.Password, &wallet, &u.Role, pq.Array(&u.Specialities))
+	err := row.Scan(&u.ID, &u.Email, &u.Password, &wallet, &u.Role, pq.Array(&u.Specialities), pq.Array(&u.VerifiedFields))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

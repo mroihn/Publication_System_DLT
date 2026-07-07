@@ -68,6 +68,7 @@ type ProcessedEvent struct {
 type ManuscriptDetail struct {
 	ManuscriptSummary
 	Metadata        string               `json:"metadata"`
+	Field           *string              `json:"field"`
 	DOI             *string              `json:"doi"`
 	DOITokenID      *int64               `json:"doi_token_id"`
 	AcceptCount     int                  `json:"accept_count"`
@@ -125,14 +126,14 @@ func (r *PostgresManuscriptReader) GetManuscriptByID(ctx context.Context, msId u
 
 	err := r.db.QueryRowContext(ctx, `
 		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
-		       COALESCE(author_address,''), plagiarism_score, doi, doi_token_id,
+		       COALESCE(author_address,''), plagiarism_score, field, doi, doi_token_id,
 		       accept_count, reject_count, revise_count,
 		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
 		       submit_timestamp, created_at, updated_at
 		FROM manuscripts WHERE ms_id = $1
 	`, msId).Scan(
 		&d.MsId, &d.CID, &d.Metadata, &d.Status, &d.Version,
-		&d.AuthorAddress, &d.PlagiarismScore, &d.DOI, &d.DOITokenID,
+		&d.AuthorAddress, &d.PlagiarismScore, &d.Field, &d.DOI, &d.DOITokenID,
 		&d.AcceptCount, &d.RejectCount, &d.ReviseCount,
 		&d.SubmitTxHash, &d.SubmitBlock,
 		&d.SubmitTimestamp, &d.CreatedAt, &d.UpdatedAt,

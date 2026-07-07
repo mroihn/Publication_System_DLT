@@ -81,8 +81,11 @@ contract PublicationRegistry is
         UNDER_REVIEW,        // 2 — assigned to reviewers
         REVISION_REQUESTED,  // 3 — majority said REVISE
         ACCEPTED,            // 4 — majority said ACCEPT
-        REJECTED,            // 5 — rejected (plagiarism or review)
-        PUBLISHED            // 6 — fee paid, DOI minted
+        REJECTED,            // 5 — rejected (plagiarism, editor desk-reject, or review)
+        PUBLISHED,           // 6 — fee paid, DOI minted
+        PENDING_EDITOR       // 7 — plagiarism passed, awaiting editor screening (workflow-wise
+                             //     it sits between CHECKING and UNDER_REVIEW; appended here so the
+                             //     UUPS upgrade keeps stored status values 0-6 valid)
     }
 
     enum Verdict {
@@ -105,6 +108,7 @@ contract PublicationRegistry is
         uint256 reviseCount;
         uint256 reviewCount;
         string doi;
+        string field; // subject field assigned by the editor (append-only for upgrade safety)
     }
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -137,6 +141,8 @@ contract PublicationRegistry is
     mapping(uint256 => mapping(address => bool)) public hasReviewed;
     mapping(uint256 => mapping(address => string)) public reviewHashes;
     mapping(address => uint256) public nonces;
+    // Editor-verified subject fields per reviewer (latest set overwrites). Appended for upgrade safety.
+    mapping(address => string[]) private _verifiedReviewerFields;
 
     error InvalidState(uint256 msId, Status expected, Status actual);
     error NotAuthor(uint256 msId, address caller);
@@ -157,6 +163,8 @@ contract PublicationRegistry is
     event ReviewersAssigned(uint256 indexed msId, address[] reviewers);
     event DOIMinted(uint256 indexed msId, uint256 indexed doiTokenId);
     event DOIRegistered(uint256 indexed msId, string doi, uint256 indexed doiTokenId);
+    event EditorReviewed(uint256 indexed msId, bool approved, string field, string editorCid);
+    event ReviewerFieldsVerified(address indexed reviewer, string[] fields);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -242,10 +250,46 @@ contract PublicationRegistry is
             return;
         }
 
-        ms.status = Status.UNDER_REVIEW;
-        emit DecisionMade(msId, Status.UNDER_REVIEW);
+        // Plagiarism passed — wait for an editor to screen and categorize the manuscript
+        // before any reviewers are requested.
+        ms.status = Status.PENDING_EDITOR;
+        emit DecisionMade(msId, Status.PENDING_EDITOR);
+    }
 
-        reviewOracle.requestRandomReviewers(msId);
+    // Editor screening (backend-relayed via OPERATOR_ROLE; editor identity is enforced
+    // off-chain by the backend's JWT role). Approve → assign field, move to UNDER_REVIEW
+    // and request reviewers; reject → desk-reject the manuscript.
+    function submitEditorReview(
+        uint256 msId,
+        bool approve,
+        string calldata field,
+        string calldata editorCid
+    ) external onlyRole(OPERATOR_ROLE) {
+        _requireState(msId, Status.PENDING_EDITOR);
+        Manuscript storage ms = _manuscripts[msId];
+
+        if (approve) {
+            ms.field = field;
+            ms.status = Status.UNDER_REVIEW;
+            emit EditorReviewed(msId, true, field, editorCid);
+            emit DecisionMade(msId, Status.UNDER_REVIEW);
+            reviewOracle.requestRandomReviewers(msId);
+        } else {
+            ms.status = Status.REJECTED;
+            emit EditorReviewed(msId, false, field, editorCid);
+            emit DecisionMade(msId, Status.REJECTED);
+        }
+    }
+
+    // Records a reviewer's editor-verified subject fields on-chain (backend-relayed).
+    // Overwrites any previous set — the latest verification wins.
+    function verifyReviewerFields(
+        address reviewer,
+        string[] calldata fields
+    ) external onlyRole(OPERATOR_ROLE) {
+        if (reviewer == address(0)) revert ZeroAddress();
+        _verifiedReviewerFields[reviewer] = fields;
+        emit ReviewerFieldsVerified(reviewer, fields);
     }
 
     function fulfillRandomReviewers(
@@ -419,6 +463,18 @@ contract PublicationRegistry is
     ) external view returns (address[] memory) {
         if (msId >= nextManuscriptId) revert ManuscriptNotFound(msId);
         return _manuscripts[msId].reviewers;
+    }
+
+    // Subject field assigned by the editor. The oracle reads this to pick field-matched reviewers.
+    function getField(uint256 msId) external view returns (string memory) {
+        if (msId >= nextManuscriptId) revert ManuscriptNotFound(msId);
+        return _manuscripts[msId].field;
+    }
+
+    function getVerifiedFields(
+        address reviewer
+    ) external view returns (string[] memory) {
+        return _verifiedReviewerFields[reviewer];
     }
 
     function _evaluateDecision(uint256 msId) internal {

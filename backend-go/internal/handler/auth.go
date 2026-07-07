@@ -7,15 +7,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/mroihn/ta-proj/backend-go/internal/domain"
+	"github.com/mroihn/ta-proj/backend-go/internal/repository"
 	"github.com/mroihn/ta-proj/backend-go/internal/usecase"
 )
 
 type AuthHandler struct {
-	authUC *usecase.AuthUseCase
+	authUC     *usecase.AuthUseCase
+	editorRepo repository.EditorRepository
 }
 
-func NewAuthHandler(authUC *usecase.AuthUseCase) *AuthHandler {
-	return &AuthHandler{authUC: authUC}
+func NewAuthHandler(authUC *usecase.AuthUseCase, editorRepo repository.EditorRepository) *AuthHandler {
+	return &AuthHandler{authUC: authUC, editorRepo: editorRepo}
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -38,6 +40,14 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 		c.JSON(status, gin.H{"message": err.Error()})
 		return
+	}
+
+	// Reviewers start with their declared fields pending editor verification.
+	if user.Role == "reviewer" && len(user.Specialities) > 0 {
+		if err := h.editorRepo.CreatePendingFieldRequest(user.ID, user.Specialities); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "registered but failed to queue verification: " + err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -70,11 +80,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"accessToken": result.AccessToken,
 		"user": gin.H{
-			"id":            result.User.ID,
-			"email":         result.User.Email,
-			"walletAddress": result.User.WalletAddress,
-			"role":          result.User.Role,
-			"specialities":  result.User.Specialities,
+			"id":             result.User.ID,
+			"email":          result.User.Email,
+			"walletAddress":  result.User.WalletAddress,
+			"role":           result.User.Role,
+			"specialities":   result.User.Specialities,
+			"verifiedFields": result.User.VerifiedFields,
 		},
 	})
 }
@@ -93,10 +104,11 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 func (h *AuthHandler) Me(c *gin.Context) {
 	user := c.MustGet("user").(*domain.User)
 	c.JSON(http.StatusOK, gin.H{
-		"id":            user.ID,
-		"email":         user.Email,
-		"walletAddress": user.WalletAddress,
-		"role":          user.Role,
-		"specialities":  user.Specialities,
+		"id":             user.ID,
+		"email":          user.Email,
+		"walletAddress":  user.WalletAddress,
+		"role":           user.Role,
+		"specialities":   user.Specialities,
+		"verifiedFields": user.VerifiedFields,
 	})
 }

@@ -89,6 +89,7 @@ const EXPLORER = "https://sepolia.etherscan.io";
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     CHECKING: "bg-amber-100 text-amber-800",
+    PENDING_EDITOR: "bg-purple-100 text-purple-800",
     UNDER_REVIEW: "bg-blue-100 text-blue-800",
     REVISION_REQUESTED: "bg-orange-100 text-orange-800",
     ACCEPTED: "bg-green-100 text-green-800",

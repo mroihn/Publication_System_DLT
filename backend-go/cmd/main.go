@@ -38,6 +38,7 @@ func main() {
 	userRepo := repository.NewPostgresUserRepository(db)
 	msReader := repository.NewPostgresManuscriptReader(db)
 	sessionRepo := repository.NewPostgresSessionWalletRepository(db, userRepo)
+	editorRepo := repository.NewPostgresEditorRepository(db)
 	pinata := service.NewPinataService(cfg.PinataJWT)
 	ethereum := service.NewEthereumService(cfg.RPCURL, cfg.OperatorPrivateKey, cfg.RegistryContractAddress)
 
@@ -47,9 +48,10 @@ func main() {
 	userUC := usecase.NewUserUseCase(userRepo)
 
 	// HTTP handlers
-	authHandler := handler.NewAuthHandler(authUC)
+	authHandler := handler.NewAuthHandler(authUC, editorRepo)
 	manuscriptHandler := handler.NewManuscriptHandler(manuscriptUC, sessionRepo)
 	sessionHandler := handler.NewSessionHandler(sessionRepo, cfg.OracleSharedSecret)
+	editorHandler := handler.NewEditorHandler(editorRepo, ethereum, pinata)
 	userHandler := handler.NewUserHandler(userUC)
 
 	// Indexer (disabled if no registry address configured)
@@ -145,6 +147,17 @@ func main() {
 
 		// Reviewer fetches their burner session wallets to sign reviews.
 		v1.GET("/reviewer/assignments", jwtMW, sessionHandler.GetAssignments)
+		// Reviewer (re)submits specialization fields for editor verification.
+		v1.POST("/reviewer/specialization", jwtMW, editorHandler.SubmitReviewerFields)
+
+		// Editor: reviewer specialization verification + manuscript screening.
+		editor := v1.Group("/editor", jwtMW)
+		{
+			editor.GET("/reviewer-verifications", editorHandler.ListReviewerVerifications)
+			editor.POST("/reviewer-verifications/:id/decision", editorHandler.DecideReviewerVerification)
+			editor.GET("/manuscripts", editorHandler.ListPendingManuscripts)
+			editor.POST("/manuscripts/:id/review", editorHandler.ReviewManuscript)
+		}
 	}
 
 	addr := "0.0.0.0:" + cfg.Port

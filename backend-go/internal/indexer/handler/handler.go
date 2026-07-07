@@ -23,6 +23,7 @@ func BuildHandlerMap(repo idxrepo.IndexerRepository, client blockchain.Blockchai
 		&ManuscriptRevisedHandler{repo: repo},
 		&DOIMintedHandler{repo: repo},
 		&DOIRegisteredHandler{repo: repo},
+		&EditorReviewedHandler{repo: repo},
 		&IncentivePaidHandler{repo: repo},
 		&PlagiarismRequestedHandler{repo: repo},
 		&PlagiarismFulfilledHandler{repo: repo},

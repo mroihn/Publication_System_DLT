@@ -50,9 +50,15 @@ describe("Full Flow — Submit to DOI", function () {
     ACCEPTED: 4,
     REJECTED: 5,
     PUBLISHED: 6,
+    PENDING_EDITOR: 7,
   };
 
   const Verdict = { ACCEPT: 0, REJECT: 1, REVISE: 2 };
+
+  // Editor screening: plagiarism pass now parks the manuscript in PENDING_EDITOR
+  // until an editor approves it and assigns a field, which then requests reviewers.
+  const FIELD = "ai";
+  const EDITOR_CID = "QmEditorReviewCID";
 
   // EIP-712 type definitions
   const SUBMIT_MS_TYPES = {
@@ -208,18 +214,33 @@ describe("Full Flow — Submit to DOI", function () {
       expect(ms.version).to.equal(1);
     });
 
-    it("Step 2a: Oracle operator fulfills plagiarism check (score=15, pass) → UNDER_REVIEW + ReviewerSelectionRequested", async function () {
+    it("Step 2a: Oracle operator fulfills plagiarism check (score=15, pass) → PENDING_EDITOR (no reviewers yet)", async function () {
       // plagiarism requestId = 0
       const tx = await reviewOracle.connect(oracleOperator).fulfillPlagiarismCheck(0, 15);
 
       await expect(tx).to.emit(reviewOracle, "PlagiarismCheckFulfilled").withArgs(0, 0, 15);
+      await expect(tx).to.emit(registry, "DecisionMade").withArgs(msId, Status.PENDING_EDITOR);
+      // No reviewer selection is requested until an editor approves.
+      await expect(tx).to.not.emit(reviewOracle, "ReviewerSelectionRequested");
+
+      const ms = await registry.getManuscript(msId);
+      expect(ms.status).to.equal(Status.PENDING_EDITOR);
+      expect(ms.plagiarismScore).to.equal(15);
+      expect(ms.reviewers.length).to.equal(0);
+    });
+
+    it("Step 2a-editor: Editor approves and assigns field → UNDER_REVIEW + ReviewerSelectionRequested", async function () {
+      // reviewer selection requestId = 0 is created here (by the editor approval)
+      const tx = await registry.connect(admin).submitEditorReview(msId, true, FIELD, EDITOR_CID);
+
+      await expect(tx).to.emit(registry, "EditorReviewed").withArgs(msId, true, FIELD, EDITOR_CID);
       await expect(tx).to.emit(registry, "DecisionMade").withArgs(msId, Status.UNDER_REVIEW);
       await expect(tx).to.emit(reviewOracle, "ReviewerSelectionRequested");
 
       const ms = await registry.getManuscript(msId);
       expect(ms.status).to.equal(Status.UNDER_REVIEW);
-      expect(ms.plagiarismScore).to.equal(15);
-      expect(ms.reviewers.length).to.equal(0);
+      expect(ms.field).to.equal(FIELD);
+      expect(await registry.getField(msId)).to.equal(FIELD);
     });
 
     it("Step 2b: Oracle operator fulfills reviewer selection (off-chain, 3 reviewers) → ReviewersAssigned", async function () {
@@ -341,7 +362,7 @@ describe("Full Flow — Submit to DOI", function () {
     let msId;
     let assignedReviewers;
 
-    it("Step 1: Submit and pass plagiarism → UNDER_REVIEW", async function () {
+    it("Step 1: Submit, pass plagiarism, editor approves → UNDER_REVIEW", async function () {
       const cid = "QmOriginalDraftV1abc";
       const { nonce, v, r, s } = await signMs(researcher, cid, '{"title":"Draft V1"}');
       await registry.connect(admin).submitManuscript(cid, '{"title":"Draft V1"}', nonce, v, r, s);
@@ -349,8 +370,12 @@ describe("Full Flow — Submit to DOI", function () {
 
       // plagiarismRequestId = 2
       await reviewOracle.connect(oracleOperator).fulfillPlagiarismCheck(2, 10);
+      let ms = await registry.getManuscript(msId);
+      expect(ms.status).to.equal(Status.PENDING_EDITOR);
 
-      const ms = await registry.getManuscript(msId);
+      // editor approves → reviewerSelectionRequestId = 1
+      await registry.connect(admin).submitEditorReview(msId, true, FIELD, EDITOR_CID);
+      ms = await registry.getManuscript(msId);
       expect(ms.status).to.equal(Status.UNDER_REVIEW);
     });
 
@@ -401,11 +426,15 @@ describe("Full Flow — Submit to DOI", function () {
       expect(ms.reviewCount).to.equal(0);
     });
 
-    it("Step 4: Second plagiarism check passes → UNDER_REVIEW + ReviewerSelectionRequested", async function () {
+    it("Step 4: Second plagiarism check passes + editor approves → UNDER_REVIEW + ReviewerSelectionRequested", async function () {
       // plagiarismRequestId = 3 (fourth plagiarism request overall)
       await reviewOracle.connect(oracleOperator).fulfillPlagiarismCheck(3, 5);
+      let ms = await registry.getManuscript(msId);
+      expect(ms.status).to.equal(Status.PENDING_EDITOR);
 
-      const ms = await registry.getManuscript(msId);
+      // editor approves again → reviewerSelectionRequestId = 2
+      await registry.connect(admin).submitEditorReview(msId, true, FIELD, EDITOR_CID);
+      ms = await registry.getManuscript(msId);
       expect(ms.status).to.equal(Status.UNDER_REVIEW);
     });
 
@@ -463,7 +492,8 @@ describe("Full Flow — Submit to DOI", function () {
       await registry.connect(admin).submitManuscript(cid, '{"title":"Guard Test"}', nonce, v, r, s);
       // msId = 3; plagiarismRequestId = 4
       await reviewOracle.connect(oracleOperator).fulfillPlagiarismCheck(4, 5);
-      // reviewerSelectionRequestId = 3
+      // editor approves → reviewerSelectionRequestId = 3
+      await registry.connect(admin).submitEditorReview(3, true, FIELD, EDITOR_CID);
 
       const evenReviewers = [
         reviewer1.address,
