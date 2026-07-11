@@ -22,6 +22,9 @@ type ReviewerSessionView struct {
 	Status         string `json:"status"`
 	SessionAddress string `json:"session_address"`
 	SessionPrivKey string `json:"session_privkey"`
+	Metadata       string `json:"metadata"`
+	CID            string `json:"cid"`
+	Reviewed       bool   `json:"reviewed"`
 }
 
 type SessionWalletRepository interface {
@@ -127,7 +130,11 @@ func (r *PostgresSessionWalletRepository) CreateReviewerSessionsForField(msId ui
 
 func (r *PostgresSessionWalletRepository) GetReviewerSessionsForUser(userID, walletAddress string) ([]ReviewerSessionView, error) {
 	rows, err := r.db.Query(
-		`SELECT rs.ms_id, COALESCE(m.status, ''), rs.session_address, rs.session_privkey
+		`SELECT rs.ms_id, COALESCE(m.status, ''), rs.session_address, rs.session_privkey,
+		        COALESCE(m.metadata, ''), COALESCE(m.cid, ''),
+		        EXISTS(SELECT 1 FROM reviews rv
+		               WHERE rv.ms_id = rs.ms_id
+		                 AND lower(rv.reviewer_address) = lower(rs.session_address)) AS reviewed
 		 FROM reviewer_sessions rs
 		 LEFT JOIN manuscripts m ON m.ms_id = rs.ms_id
 		 WHERE rs.user_id = $1 OR rs.main_address = $2
@@ -142,7 +149,8 @@ func (r *PostgresSessionWalletRepository) GetReviewerSessionsForUser(userID, wal
 	var result []ReviewerSessionView
 	for rows.Next() {
 		var v ReviewerSessionView
-		if err := rows.Scan(&v.MsID, &v.Status, &v.SessionAddress, &v.SessionPrivKey); err != nil {
+		if err := rows.Scan(&v.MsID, &v.Status, &v.SessionAddress, &v.SessionPrivKey,
+			&v.Metadata, &v.CID, &v.Reviewed); err != nil {
 			return nil, err
 		}
 		result = append(result, v)

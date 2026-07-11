@@ -1,0 +1,1 @@
+ALTER TABLE reviewer_sessions ALTER COLUMN tier TYPE VARCHAR(8);

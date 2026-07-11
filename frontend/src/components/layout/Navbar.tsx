@@ -28,6 +28,7 @@ export default function Navbar() {
   const authed: NavLink[] = [
     { href: "/author/submit", label: "Submit" },
     { href: "/author/revise", label: "Revise" },
+    { href: "/reviewer/assignments", label: "Assignments" },
     { href: "/reviewer/specialization", label: "Specialization" },
     { href: "/reviewer/earnings", label: "Earnings" },
     { href: "/editor", label: "Editor" },
