@@ -168,30 +168,104 @@ func (idx *Indexer) historicalSync(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("Indexer: fetching logs from block %d to %d", fromBlock, head)
-	logs, err := idx.client.FilterLogs(ctx, ethereum.FilterQuery{
-		FromBlock: big.NewInt(int64(fromBlock)),
-		ToBlock:   big.NewInt(int64(head)),
-		Addresses: addrs,
-	})
-	if err != nil {
-		return err
-	}
+	log.Printf("Indexer: syncing logs from block %d to %d", fromBlock, head)
+	return idx.syncRange(ctx, fromBlock, head, addrs)
+}
 
-	// Sort by (blockNumber, logIndex) to ensure causal order.
-	sort.Slice(logs, func(i, j int) bool {
-		if logs[i].BlockNumber != logs[j].BlockNumber {
-			return logs[i].BlockNumber < logs[j].BlockNumber
+// maxLogRange keeps each eth_getLogs call within the RPC provider's block-range
+// limit (Infura caps it at 10,000 blocks).
+const maxLogRange = uint64(9000)
+
+// syncRange fetches and processes logs in windows of at most maxLogRange blocks,
+// advancing the checkpoint after each window — including empty ones — so a large
+// initial gap is walked incrementally and never re-scanned.
+func (idx *Indexer) syncRange(ctx context.Context, fromBlock, toBlock uint64, addrs []common.Address) error {
+	for start := fromBlock; start <= toBlock; start += maxLogRange {
+		end := start + maxLogRange - 1
+		if end > toBlock {
+			end = toBlock
 		}
-		return logs[i].Index < logs[j].Index
-	})
 
-	for _, l := range logs {
-		if err := idx.processLogWithRetry(ctx, l); err != nil {
-			log.Printf("Indexer: error processing log %s[%d]: %v", l.TxHash.Hex(), l.Index, err)
+		logs, err := idx.fetchLogs(ctx, start, end, addrs)
+		if err != nil {
+			return err
+		}
+
+		sort.Slice(logs, func(i, j int) bool {
+			if logs[i].BlockNumber != logs[j].BlockNumber {
+				return logs[i].BlockNumber < logs[j].BlockNumber
+			}
+			return logs[i].Index < logs[j].Index
+		})
+		for _, l := range logs {
+			if err := idx.processLogWithRetry(ctx, l); err != nil {
+				log.Printf("Indexer: error processing log %s[%d]: %v", l.TxHash.Hex(), l.Index, err)
+			}
+		}
+
+		if err := idx.advanceCheckpoints(ctx, end); err != nil {
+			log.Printf("Indexer: checkpoint save error at block %d: %v", end, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// fetchLogs retrieves logs for a block window, retrying transient RPC errors with
+// backoff and halving the window when the provider keeps rejecting it (e.g. too
+// many results or an internal error on a busy range).
+func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64, addrs []common.Address) ([]types.Log, error) {
+	var lastErr error
+	delay := 500 * time.Millisecond
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+			delay *= 2
+		}
+		logs, err := idx.client.FilterLogs(ctx, ethereum.FilterQuery{
+			FromBlock: new(big.Int).SetUint64(from),
+			ToBlock:   new(big.Int).SetUint64(to),
+			Addresses: addrs,
+		})
+		if err == nil {
+			return logs, nil
+		}
+		lastErr = err
+	}
+
+	if from < to {
+		mid := from + (to-from)/2
+		left, err := idx.fetchLogs(ctx, from, mid, addrs)
+		if err != nil {
+			return nil, err
+		}
+		right, err := idx.fetchLogs(ctx, mid+1, to, addrs)
+		if err != nil {
+			return nil, err
+		}
+		return append(left, right...), nil
+	}
+	return nil, lastErr
+}
+
+func (idx *Indexer) advanceCheckpoints(ctx context.Context, block uint64) error {
+	tx, err := idx.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, key := range []string{"registry", "oracle", "doitoken"} {
+		if err := idx.repo.SaveLastBlock(ctx, tx, key, block); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // liveSync subscribes to new logs via WebSocket or polls via HTTP.
@@ -280,25 +354,8 @@ func (idx *Indexer) liveSyncHTTP(ctx context.Context) error {
 			if fromBlock > head {
 				continue
 			}
-			logs, err := idx.client.FilterLogs(ctx, ethereum.FilterQuery{
-				FromBlock: big.NewInt(int64(fromBlock)),
-				ToBlock:   big.NewInt(int64(head)),
-				Addresses: addrs,
-			})
-			if err != nil {
-				log.Printf("Indexer: filter logs error: %v", err)
-				continue
-			}
-			sort.Slice(logs, func(i, j int) bool {
-				if logs[i].BlockNumber != logs[j].BlockNumber {
-					return logs[i].BlockNumber < logs[j].BlockNumber
-				}
-				return logs[i].Index < logs[j].Index
-			})
-			for _, l := range logs {
-				if err := idx.processLogWithRetry(ctx, l); err != nil {
-					log.Printf("Indexer: error processing log %s[%d]: %v", l.TxHash.Hex(), l.Index, err)
-				}
+			if err := idx.syncRange(ctx, fromBlock, head, addrs); err != nil {
+				log.Printf("Indexer: sync error: %v", err)
 			}
 		}
 	}
