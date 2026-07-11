@@ -147,7 +147,8 @@ func main() {
 
 		// Reviewer fetches their burner session wallets to sign reviews.
 		v1.GET("/reviewer/assignments", jwtMW, sessionHandler.GetAssignments)
-		// Reviewer (re)submits specialization fields for editor verification.
+		// Reviewer views + (re)submits specialization fields for editor verification.
+		v1.GET("/reviewer/specialization", jwtMW, editorHandler.GetReviewerSpecialization)
 		v1.POST("/reviewer/specialization", jwtMW, editorHandler.SubmitReviewerFields)
 
 		// Editor: reviewer specialization verification + manuscript screening.

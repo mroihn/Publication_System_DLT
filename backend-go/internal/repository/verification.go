@@ -7,7 +7,6 @@ import (
 	"github.com/lib/pq"
 )
 
-// FieldRequest is a reviewer's pending/decided specialization verification.
 type FieldRequest struct {
 	ID            int64     `json:"id"`
 	UserID        string    `json:"user_id"`
@@ -18,7 +17,6 @@ type FieldRequest struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// PendingManuscript is a manuscript awaiting editor screening.
 type PendingManuscript struct {
 	MsID          uint64    `json:"ms_id"`
 	CID           string    `json:"cid"`
@@ -33,6 +31,7 @@ type EditorRepository interface {
 	CreatePendingFieldRequest(userID string, fields []string) error
 	ListPendingFieldRequests() ([]FieldRequest, error)
 	GetFieldRequest(id int64) (*FieldRequest, error)
+	GetLatestFieldRequestForUser(userID string) (*FieldRequest, error)
 	MarkFieldRequestApproved(id int64, editorID string, fields []string) error
 	RejectFieldRequest(id int64, editorID string) error
 	ListManuscriptsByStatus(status string) ([]PendingManuscript, error)
@@ -46,8 +45,6 @@ func NewPostgresEditorRepository(db *sql.DB) *PostgresEditorRepository {
 	return &PostgresEditorRepository{db: db}
 }
 
-// CreatePendingFieldRequest supersedes any earlier still-pending request for the
-// same reviewer (a resubmission), then inserts a fresh pending one.
 func (r *PostgresEditorRepository) CreatePendingFieldRequest(userID string, fields []string) error {
 	if fields == nil {
 		fields = []string{}
@@ -121,8 +118,27 @@ func (r *PostgresEditorRepository) GetFieldRequest(id int64) (*FieldRequest, err
 	return &fr, nil
 }
 
-// MarkFieldRequestApproved is called after the on-chain relay succeeds: it marks
-// the request approved and mirrors the verified fields onto the user row.
+func (r *PostgresEditorRepository) GetLatestFieldRequestForUser(userID string) (*FieldRequest, error) {
+	var fr FieldRequest
+	err := r.db.QueryRow(
+		`SELECT rfr.id, rfr.user_id, u.email, COALESCE(u.wallet_address, ''),
+		        rfr.fields, rfr.status, rfr.created_at
+		 FROM reviewer_field_requests rfr
+		 JOIN users u ON u.id = rfr.user_id
+		 WHERE rfr.user_id = $1
+		 ORDER BY rfr.created_at DESC
+		 LIMIT 1`, userID,
+	).Scan(&fr.ID, &fr.UserID, &fr.Email, &fr.WalletAddress,
+		pq.Array(&fr.Fields), &fr.Status, &fr.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &fr, nil
+}
+
 func (r *PostgresEditorRepository) MarkFieldRequestApproved(id int64, editorID string, fields []string) error {
 	tx, err := r.db.Begin()
 	if err != nil {

@@ -11,7 +11,6 @@ import (
 	"github.com/mroihn/ta-proj/backend-go/internal/repository"
 )
 
-// editorContract is the subset of the Ethereum relayer the editor flow needs.
 type editorContract interface {
 	SubmitEditorReview(msId uint64, approve bool, field, editorCid string) (string, error)
 	VerifyReviewerFields(reviewerAddr string, fields []string) (string, error)
@@ -39,7 +38,6 @@ func NewEditorHandler(repo repository.EditorRepository, contract editorContract,
 	return &EditorHandler{repo: repo, contract: contract, storage: storage}
 }
 
-// requireEditor returns the logged-in user if they hold the editor role.
 func requireEditor(c *gin.Context) (*domain.User, bool) {
 	user := c.MustGet("user").(*domain.User)
 	if user.Role != "editor" {
@@ -48,8 +46,6 @@ func requireEditor(c *gin.Context) (*domain.User, bool) {
 	}
 	return user, true
 }
-
-// ── Reviewer specialization verification ────────────────────────────────────
 
 func (h *EditorHandler) ListReviewerVerifications(c *gin.Context) {
 	if _, ok := requireEditor(c); !ok {
@@ -106,12 +102,12 @@ func (h *EditorHandler) DecideReviewerVerification(c *gin.Context) {
 		return
 	}
 
-	// Approve: the on-chain record is keyed by the reviewer's bound wallet.
+	
 	if fr.WalletAddress == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "reviewer must bind a wallet before approval"})
 		return
 	}
-	// Relay on-chain first; only mark approved in the DB if that succeeds.
+	
 	txHash, err := h.contract.VerifyReviewerFields(fr.WalletAddress, fr.Fields)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "on-chain verification failed: " + err.Error()})
@@ -128,9 +124,25 @@ type reviewerFieldsRequest struct {
 	Fields []string `json:"fields"`
 }
 
-// SubmitReviewerFields lets a reviewer (re)submit their specialization fields for
-// editor verification, creating a fresh pending request (supersedes any prior one).
-// Used both at registration and to change fields later.
+
+func (h *EditorHandler) GetReviewerSpecialization(c *gin.Context) {
+	user := c.MustGet("user").(*domain.User)
+	if user.Role != "reviewer" {
+		c.JSON(http.StatusForbidden, gin.H{"message": "reviewer role required"})
+		return
+	}
+	req, err := h.repo.GetLatestFieldRequestForUser(user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"verified_fields": user.VerifiedFields,
+		"wallet_address":  user.WalletAddress,
+		"request":         req,
+	})
+}
+
 func (h *EditorHandler) SubmitReviewerFields(c *gin.Context) {
 	user := c.MustGet("user").(*domain.User)
 	if user.Role != "reviewer" {
@@ -161,8 +173,6 @@ func (h *EditorHandler) SubmitReviewerFields(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "pending", "fields": cleaned})
 }
-
-// ── Manuscript screening ────────────────────────────────────────────────────
 
 func (h *EditorHandler) ListPendingManuscripts(c *gin.Context) {
 	if _, ok := requireEditor(c); !ok {
@@ -201,7 +211,6 @@ func (h *EditorHandler) ReviewManuscript(c *gin.Context) {
 		return
 	}
 
-	// Store the editor's decision message on IPFS (mirrors the review flow).
 	payload, _ := json.Marshal(map[string]any{
 		"approve": req.Approve, "field": req.Field, "message": req.Message,
 	})
