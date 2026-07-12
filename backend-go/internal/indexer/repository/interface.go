@@ -16,12 +16,13 @@ type IndexerRepository interface {
 	SaveLastBlock(ctx context.Context, tx *sql.Tx, contractKey string, block uint64) error
 
 	UpsertManuscript(ctx context.Context, tx *sql.Tx, ms ManuscriptRow) error
+	GetManuscriptVersion(ctx context.Context, tx *sql.Tx, msId uint64) (uint64, error)
 	UpdateManuscriptStatus(ctx context.Context, tx *sql.Tx, msId uint64, status string) error
 	UpdateManuscriptCID(ctx context.Context, tx *sql.Tx, msId uint64, newCid string, version uint64) error
 	UpdateManuscriptDOI(ctx context.Context, tx *sql.Tx, msId uint64, doi string, doiTokenId uint64) error
 	UpdateManuscriptField(ctx context.Context, tx *sql.Tx, msId uint64, field string) error
 	IncrementVerdictCount(ctx context.Context, tx *sql.Tx, msId uint64, verdict string) error
-	SetReviewers(ctx context.Context, tx *sql.Tx, msId uint64, reviewers []string) error
+	SetReviewers(ctx context.Context, tx *sql.Tx, msId uint64, reviewers []string, version uint64) error
 	InsertReview(ctx context.Context, tx *sql.Tx, review ReviewRow) error
 	InsertPlagiarismRequest(ctx context.Context, tx *sql.Tx, requestId, msId uint64, cid string) error
 	FulfillPlagiarismRequest(ctx context.Context, tx *sql.Tx, requestId, msId, score uint64) error
@@ -49,6 +50,7 @@ type ReviewRow struct {
 	ReviewCid       string
 	TxHash          string
 	BlockNumber     uint64
+	Version         uint64
 }
 
 type CommentRow struct {

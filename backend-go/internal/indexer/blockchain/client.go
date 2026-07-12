@@ -17,6 +17,7 @@ type BlockchainClient interface {
 	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
 	BlockNumber(ctx context.Context) (uint64, error)
 	TransactionByHash(ctx context.Context, hash common.Hash) (*types.Transaction, bool, error)
+	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 	Close()
 }
 
@@ -54,6 +55,10 @@ func (a *EthClientAdapter) BlockNumber(ctx context.Context) (uint64, error) {
 
 func (a *EthClientAdapter) TransactionByHash(ctx context.Context, hash common.Hash) (*types.Transaction, bool, error) {
 	return a.client.TransactionByHash(ctx, hash)
+}
+
+func (a *EthClientAdapter) CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	return a.client.CallContract(ctx, msg, blockNumber)
 }
 
 func (a *EthClientAdapter) Close() {

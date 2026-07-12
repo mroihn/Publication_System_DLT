@@ -64,6 +64,21 @@ func (r *PostgresIndexerRepository) UpsertManuscript(ctx context.Context, tx *sq
 	return err
 }
 
+func (r *PostgresIndexerRepository) GetManuscriptVersion(ctx context.Context, tx *sql.Tx, msId uint64) (uint64, error) {
+	var version uint64
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(version, 1) FROM manuscripts WHERE ms_id = $1`, msId).Scan(&version)
+	if err == sql.ErrNoRows {
+		return 1, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if version == 0 {
+		version = 1
+	}
+	return version, nil
+}
+
 func (r *PostgresIndexerRepository) UpdateManuscriptStatus(ctx context.Context, tx *sql.Tx, msId uint64, status string) error {
 	_, err := tx.ExecContext(ctx,
 		`UPDATE manuscripts SET status = $1, updated_at = NOW() WHERE ms_id = $2`,
@@ -118,22 +133,22 @@ func (r *PostgresIndexerRepository) IncrementVerdictCount(ctx context.Context, t
 	return err
 }
 
-func (r *PostgresIndexerRepository) SetReviewers(ctx context.Context, tx *sql.Tx, msId uint64, reviewers []string) error {
-	// Delete existing assignments for this manuscript (handles re-assignment after revision)
-	if _, err := tx.ExecContext(ctx, `DELETE FROM manuscript_reviewers WHERE ms_id = $1`, msId); err != nil {
+func (r *PostgresIndexerRepository) SetReviewers(ctx context.Context, tx *sql.Tx, msId uint64, reviewers []string, version uint64) error {
+	// Replace only this version's assignments so earlier versions stay for the audit trail.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM manuscript_reviewers WHERE ms_id = $1 AND version = $2`, msId, version); err != nil {
 		return err
 	}
 	if len(reviewers) == 0 {
 		return nil
 	}
 	vals := make([]string, 0, len(reviewers))
-	args := make([]interface{}, 0, len(reviewers)*2)
+	args := make([]any, 0, len(reviewers)*3)
 	for i, addr := range reviewers {
-		vals = append(vals, fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2))
-		args = append(args, msId, strings.ToLower(addr))
+		vals = append(vals, fmt.Sprintf("($%d, $%d, $%d)", i*3+1, i*3+2, i*3+3))
+		args = append(args, msId, strings.ToLower(addr), version)
 	}
 	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`INSERT INTO manuscript_reviewers (ms_id, reviewer_address) VALUES %s ON CONFLICT DO NOTHING`, strings.Join(vals, ",")),
+		fmt.Sprintf(`INSERT INTO manuscript_reviewers (ms_id, reviewer_address, version) VALUES %s ON CONFLICT DO NOTHING`, strings.Join(vals, ",")),
 		args...,
 	)
 	return err
@@ -141,10 +156,10 @@ func (r *PostgresIndexerRepository) SetReviewers(ctx context.Context, tx *sql.Tx
 
 func (r *PostgresIndexerRepository) InsertReview(ctx context.Context, tx *sql.Tx, review ReviewRow) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO reviews (ms_id, reviewer_address, verdict, review_cid, tx_hash, block_number)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO reviews (ms_id, reviewer_address, verdict, review_cid, tx_hash, block_number, version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 ON CONFLICT DO NOTHING`,
-		review.MsId, strings.ToLower(review.ReviewerAddress), review.Verdict, review.ReviewCid, review.TxHash, review.BlockNumber,
+		review.MsId, strings.ToLower(review.ReviewerAddress), review.Verdict, review.ReviewCid, review.TxHash, review.BlockNumber, review.Version,
 	)
 	return err
 }

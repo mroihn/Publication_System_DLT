@@ -39,6 +39,8 @@ func main() {
 	msReader := repository.NewPostgresManuscriptReader(db)
 	sessionRepo := repository.NewPostgresSessionWalletRepository(db, userRepo)
 	editorRepo := repository.NewPostgresEditorRepository(db)
+	identityResolver := repository.NewIdentityResolver(db)
+	commentRepo := repository.NewCommentRepository(db)
 	pinata := service.NewPinataService(cfg.PinataJWT)
 	ethereum := service.NewEthereumService(cfg.RPCURL, cfg.OperatorPrivateKey, cfg.RegistryContractAddress)
 
@@ -52,6 +54,7 @@ func main() {
 	manuscriptHandler := handler.NewManuscriptHandler(manuscriptUC, sessionRepo)
 	sessionHandler := handler.NewSessionHandler(sessionRepo, cfg.OracleSharedSecret)
 	editorHandler := handler.NewEditorHandler(editorRepo, ethereum, pinata)
+	articleHandler := handler.NewArticleHandler(msReader, identityResolver, commentRepo, pinata)
 	userHandler := handler.NewUserHandler(userUC)
 
 	// Indexer (disabled if no registry address configured)
@@ -74,7 +77,7 @@ func main() {
 				ethClient.Close()
 			} else {
 				repo := idxrepo.NewPostgresIndexerRepository(db)
-				handlers := idxhandler.BuildHandlerMap(repo, ethClient)
+				handlers := idxhandler.BuildHandlerMap(repo, ethClient, cfg.RegistryContractAddress)
 				idx = indexer.New(ethClient, evtParser, handlers, repo, db, indexer.Config{
 					RegistryAddress: cfg.RegistryContractAddress,
 					OracleAddress:   cfg.ReviewOracleContractAddress,
@@ -135,12 +138,16 @@ func main() {
 
 		manuscripts := v1.Group("/manuscripts")
 		{
-			manuscripts.GET("", manuscriptHandler.List)
+			manuscripts.GET("", articleHandler.List)
 			manuscripts.GET("/:id", manuscriptHandler.GetByID)
+			manuscripts.GET("/:id/open-review", articleHandler.OpenReview)
+			manuscripts.GET("/:id/comments", articleHandler.ListComments)
 			manuscripts.POST("/upload/file", manuscriptHandler.UploadFile)
 			manuscripts.POST("/submit", jwtMW, manuscriptHandler.Submit)
 			manuscripts.POST("/:id/reviews", manuscriptHandler.SubmitReview)
 		}
+
+		v1.POST("/comments/prepare", jwtMW, articleHandler.PrepareComment)
 
 		// Oracle → backend: mint reviewer burner wallets (shared-secret guarded).
 		v1.POST("/internal/reviewer-sessions", sessionHandler.CreateReviewerSessions)

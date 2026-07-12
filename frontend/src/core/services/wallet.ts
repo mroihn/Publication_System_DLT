@@ -19,6 +19,10 @@ const JOURNAL_TOKEN_ADDRESS = (
   process.env.NEXT_PUBLIC_JOURNAL_TOKEN_ADDRESS ?? ""
 ) as `0x${string}`;
 
+const DOI_TOKEN_ADDRESS = (
+  process.env.NEXT_PUBLIC_DOI_TOKEN_ADDRESS ?? ""
+) as `0x${string}`;
+
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "";
 
 // Publication fee charged by the contract: 100 JRT (18 decimals).
@@ -360,4 +364,39 @@ export async function withdrawFromSession(
   });
   await publicClient.waitForTransactionReceipt({ hash: txHash });
   return { txHash, amount };
+}
+
+// ─── Reader comments (DOIToken.postComment) ─────────────────────────────────
+
+const doiTokenAbi = [
+  {
+    name: "postComment",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "doiId", type: "uint256" },
+      { name: "hash", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+/** Posts a reader comment on a published paper's DOI NFT from the reader's own wallet. */
+export async function postDoiComment(
+  doiTokenId: number | bigint,
+  hash: `0x${string}`,
+): Promise<{ txHash: `0x${string}` }> {
+  if (!DOI_TOKEN_ADDRESS) {
+    throw new Error("DOIToken address is not configured (NEXT_PUBLIC_DOI_TOKEN_ADDRESS).");
+  }
+  const { client, account } = await getWalletClient();
+  const txHash = await client.writeContract({
+    address: DOI_TOKEN_ADDRESS,
+    abi: doiTokenAbi,
+    functionName: "postComment",
+    args: [BigInt(doiTokenId), hash],
+    account,
+  });
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  return { txHash };
 }

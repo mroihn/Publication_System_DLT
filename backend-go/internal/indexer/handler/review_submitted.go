@@ -24,6 +24,10 @@ func (h *ReviewSubmittedHandler) Handle(ctx context.Context, tx *sql.Tx, event *
 		return fmt.Errorf("ReviewSubmitted: unknown verdict code %d", verdictCode)
 	}
 	reviewCid := parser.StringArg(event.Args, "reviewCid")
+	version, err := h.repo.GetManuscriptVersion(ctx, tx, msId)
+	if err != nil {
+		return err
+	}
 	if err := h.repo.InsertReview(ctx, tx, idxrepo.ReviewRow{
 		MsId:            msId,
 		ReviewerAddress: reviewer.Hex(),
@@ -31,6 +35,7 @@ func (h *ReviewSubmittedHandler) Handle(ctx context.Context, tx *sql.Tx, event *
 		ReviewCid:       reviewCid,
 		TxHash:          event.Raw.TxHash.Hex(),
 		BlockNumber:     event.Raw.BlockNumber,
+		Version:         version,
 	}); err != nil {
 		return err
 	}

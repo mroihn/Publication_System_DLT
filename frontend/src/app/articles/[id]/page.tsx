@@ -1,115 +1,189 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
-import { FileText, User, Calendar, ExternalLink, MessageCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  ExternalLink,
+  Loader2,
+  Activity,
+  User,
+  FileText,
+  Tag,
+} from "lucide-react";
+import { apiClient } from "@/core/services/api.client";
+import { OpenReviewPanel, type Identity } from "@/components/OpenReviewPanel";
+import { Comments } from "@/components/Comments";
 
-// In a real app, this would be fetched from the smart contract/IPFS based on the ID
-const getMockArticle = (id: string) => ({
-  id,
-  title: id === "1" ? "Quantum Entanglement in Macroscopic Systems" : "Advancements in Zero-Knowledge Proofs",
-  author: "0x1234567890abcdef1234567890abcdef12345678",
-  status: id === "1" ? "Under Review" : "Published",
-  date: "2024-05-12",
-  abstract: "This paper explores the theoretical boundaries of quantum entanglement in macroscopic systems, proposing a novel framework for observation without collapse. We provide mathematical proofs and simulate the environment in a highly controlled setting.",
-  ipfsHash: "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
-});
+interface ManuscriptDetail {
+  ms_id: number;
+  cid: string;
+  metadata: string;
+  status: string;
+  version: number;
+  author_address: string;
+  field: string | null;
+  doi: string | null;
+  doi_token_id: number | null;
+  created_at: string;
+}
 
-export default async function ArticlePage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const article = getMockArticle(id);
+const FIELD_LABELS: Record<string, string> = {
+  ai: "AI",
+  "computer-security": "Computer Security",
+  blockchain: "Blockchain",
+  "cloud-computing": "Cloud Computing",
+  "data-science": "Data Science",
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    CHECKING: "bg-amber-100 text-amber-800",
+    PENDING_EDITOR: "bg-purple-100 text-purple-800",
+    UNDER_REVIEW: "bg-blue-100 text-blue-800",
+    REVISION_REQUESTED: "bg-orange-100 text-orange-800",
+    ACCEPTED: "bg-green-100 text-green-800",
+    PUBLISHED: "bg-indigo-100 text-indigo-800",
+    REJECTED: "bg-red-100 text-red-800",
+  };
+  return (
+    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${colors[status] ?? "bg-gray-100 text-gray-700"}`}>
+      {status.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+function parseMeta(metadata: string): { title: string; abstract: string } {
+  try {
+    const m = JSON.parse(metadata);
+    return { title: m.title || "Untitled", abstract: m.abstract || "" };
+  } catch {
+    return { title: "Untitled", abstract: "" };
+  }
+}
+
+function authorLabel(id: Identity | null, fallback: string): string {
+  if (id?.email) return id.email;
+  const a = id?.real_wallet || fallback;
+  return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—";
+}
+
+export default function ArticleDetailPage() {
+  const params = useParams();
+  const id = params?.id as string;
+
+  const [ms, setMs] = useState<ManuscriptDetail | null>(null);
+  const [author, setAuthor] = useState<Identity | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!id) return;
+    apiClient
+      .get<ManuscriptDetail>(`/manuscripts/${id}`)
+      .then((res) => { setMs(res.data); setError(null); })
+      .catch((err: { response?: { status?: number } }) =>
+        setError(err.response?.status === 404 ? "Manuscript not found." : "Failed to load manuscript.")
+      )
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  const handleAuthor = useCallback((a: Identity) => setAuthor(a), []);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-24">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+      </div>
+    );
+  }
+  if (error || !ms) {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-24 text-center">
+        <p className="text-red-600 font-medium mb-4">{error ?? "Unknown error."}</p>
+        <Link href="/articles" className="text-indigo-600 hover:underline text-sm">← Back to articles</Link>
+      </div>
+    );
+  }
+
+  const meta = parseMeta(ms.metadata);
 
   return (
-    <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
-      {/* Back button */}
-      <Link href="/articles" className="text-indigo-600 hover:text-indigo-700 font-medium text-sm mb-6 inline-block transition-colors">
-        &larr; Back to Articles
+    <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-12">
+      <Link href="/articles" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-6">
+        <ArrowLeft className="w-4 h-4" /> Back to articles
       </Link>
 
-      <div className="bg-white border border-gray-200 rounded-3xl p-8 md:p-10 shadow-sm mb-8">
-        <div className="flex justify-between items-start mb-6">
-          <span className={`px-4 py-1.5 rounded-full text-sm font-semibold border ${
-            article.status === "Published" 
-              ? "bg-green-50 text-green-700 border-green-200" 
-              : "bg-amber-50 text-amber-700 border-amber-200"
-          }`}>
-            {article.status}
-          </span>
-          <Link href={`/articles/${id}/peer-reviews`} className="flex items-center space-x-2 text-indigo-700 hover:text-indigo-800 text-sm font-medium transition-colors bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-100">
-            <FileText className="w-4 h-4" />
-            <span>View Peer Reviews</span>
-          </Link>
-        </div>
-
-        <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900 mb-6 leading-tight tracking-tight">
-          {article.title}
-        </h1>
-
-        <div className="flex flex-wrap gap-6 text-sm text-gray-500 mb-8 pb-8 border-b border-gray-200">
-          <div className="flex items-center space-x-2 font-medium">
-            <User className="w-4 h-4 text-gray-400" />
-            <span>{article.author.slice(0,6)}...{article.author.slice(-4)}</span>
-          </div>
-          <div className="flex items-center space-x-2 font-medium">
-            <Calendar className="w-4 h-4 text-gray-400" />
-            <span>{article.date}</span>
-          </div>
-        </div>
-
-        <div className="prose max-w-none">
-          <h3 className="text-xl font-bold text-gray-900 mb-4">Abstract</h3>
-          <p className="text-gray-700 leading-relaxed text-lg">
-            {article.abstract}
-          </p>
-        </div>
-
-        <div className="mt-10 pt-8 border-t border-gray-200">
-          <h3 className="text-lg font-bold text-gray-900 mb-4">Document Access</h3>
-          <a 
-            href={`https://ipfs.io/ipfs/${article.ipfsHash}`} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="inline-flex items-center space-x-2 bg-white hover:bg-gray-50 text-gray-700 font-medium px-6 py-3 rounded-xl transition-colors border border-gray-300 shadow-sm"
-          >
-            <ExternalLink className="w-5 h-5 text-indigo-600" />
-            <span>View IPFS Document</span>
-          </a>
-        </div>
-      </div>
-
-      {/* Comment Section Mock */}
-      <div className="bg-white border border-gray-200 rounded-3xl p-8 md:p-10 shadow-sm">
-        <h3 className="text-2xl font-bold text-gray-900 flex items-center space-x-3 mb-6">
-          <MessageCircle className="w-6 h-6 text-indigo-600" />
-          <span>Discussion</span>
-        </h3>
-        
-        <div className="mb-8">
-          <textarea
-            rows={3}
-            className="w-full bg-white border border-gray-300 rounded-xl px-4 py-3 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all resize-none mb-3 shadow-sm"
-            placeholder="Share your thoughts on this manuscript..."
-          />
-          <div className="flex justify-end">
-            <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium transition-colors text-sm shadow-sm">
-              Post Comment
-            </button>
-          </div>
-        </div>
-
-        <div className="space-y-6">
-          {/* Mock Comment */}
-          <div className="flex space-x-4">
-            <div className="w-10 h-10 rounded-full bg-gray-100 flex-shrink-0 flex items-center justify-center border border-gray-200">
-              <span className="text-xs font-medium text-gray-500">0x</span>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-6">
+          <div className="bg-white border border-gray-200 rounded-3xl p-8 shadow-sm">
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              <span className="text-xs text-gray-400 font-mono">#{ms.ms_id}</span>
+              <StatusBadge status={ms.status} />
+              {ms.version > 1 && (
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium">v{ms.version}</span>
+              )}
+              {ms.field && (
+                <span className="inline-flex items-center gap-1 text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                  <Tag className="w-3 h-3" /> {FIELD_LABELS[ms.field] ?? ms.field}
+                </span>
+              )}
             </div>
-            <div className="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-none p-4 flex-1">
-              <div className="flex justify-between items-center mb-2">
-                <span className="font-bold text-gray-900 text-sm">0xabcd...ef12</span>
-                <span className="text-xs font-medium text-gray-500">2 days ago</span>
+
+            <h1 className="text-2xl font-extrabold text-gray-900 mb-3">{meta.title}</h1>
+
+            <div className="flex items-center gap-2 text-sm text-gray-600 mb-5">
+              <User className="w-4 h-4" />
+              <span className="font-medium text-gray-800">{authorLabel(author, ms.author_address)}</span>
+              {author?.email && (
+                <span className="text-xs text-gray-400 font-mono">
+                  ({author.real_wallet.slice(0, 6)}…{author.real_wallet.slice(-4)})
+                </span>
+              )}
+            </div>
+
+            {meta.abstract && <p className="text-gray-700 leading-relaxed mb-6">{meta.abstract}</p>}
+
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm border-t border-gray-100 pt-5">
+              <div>
+                <dt className="text-gray-400 font-medium">Manuscript file</dt>
+                <dd>
+                  <a href={`https://ipfs.io/ipfs/${ms.cid}`} target="_blank" rel="noopener noreferrer"
+                     className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-mono text-xs">
+                    <FileText className="w-3.5 h-3.5" /> {ms.cid.slice(0, 20)}… <ExternalLink className="w-3 h-3" />
+                  </a>
+                </dd>
               </div>
-              <p className="text-gray-700 text-sm leading-relaxed">
-                Interesting findings! However, I wonder how this scales with larger systems. Has the author considered the impact of thermal decoherence?
-              </p>
+              {ms.doi && (
+                <div>
+                  <dt className="text-gray-400 font-medium">DOI</dt>
+                  <dd className="font-mono text-xs text-gray-700">{ms.doi}</dd>
+                </div>
+              )}
+              {ms.doi_token_id !== null && (
+                <div>
+                  <dt className="text-gray-400 font-medium">DOI NFT</dt>
+                  <dd className="font-mono text-xs text-gray-700">#{ms.doi_token_id}</dd>
+                </div>
+              )}
+            </dl>
+
+            <div className="mt-6">
+              <Link
+                href={`/tracker/${ms.ms_id}`}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-gray-900 hover:bg-gray-800 text-white text-sm font-semibold rounded-xl transition-colors"
+              >
+                <Activity className="w-4 h-4" /> View Tracker
+              </Link>
             </div>
           </div>
+
+          <Comments msId={ms.ms_id} doiTokenId={ms.doi_token_id} status={ms.status} />
+        </div>
+
+        <div className="lg:col-span-1">
+          <OpenReviewPanel msId={ms.ms_id} onAuthor={handleAuthor} />
         </div>
       </div>
     </div>

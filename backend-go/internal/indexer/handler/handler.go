@@ -14,9 +14,9 @@ type EventHandler interface {
 	Handle(ctx context.Context, tx *sql.Tx, event *parser.ParsedEvent) error
 }
 
-func BuildHandlerMap(repo idxrepo.IndexerRepository, client blockchain.BlockchainClient) map[string]EventHandler {
+func BuildHandlerMap(repo idxrepo.IndexerRepository, client blockchain.BlockchainClient, registryAddress string) map[string]EventHandler {
 	handlers := []EventHandler{
-		&ManuscriptSubmittedHandler{repo: repo, client: client},
+		&ManuscriptSubmittedHandler{repo: repo, client: client, registryAddress: registryAddress},
 		&DecisionMadeHandler{repo: repo},
 		&ReviewSubmittedHandler{repo: repo},
 		&ReviewersAssignedHandler{repo: repo},

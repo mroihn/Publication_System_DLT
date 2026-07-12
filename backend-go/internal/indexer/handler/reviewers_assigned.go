@@ -21,5 +21,9 @@ func (h *ReviewersAssignedHandler) Handle(ctx context.Context, tx *sql.Tx, event
 	for i, a := range addrs {
 		reviewers[i] = a.Hex()
 	}
-	return h.repo.SetReviewers(ctx, tx, msId, reviewers)
+	version, err := h.repo.GetManuscriptVersion(ctx, tx, msId)
+	if err != nil {
+		return err
+	}
+	return h.repo.SetReviewers(ctx, tx, msId, reviewers, version)
 }

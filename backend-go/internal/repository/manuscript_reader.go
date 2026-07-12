@@ -9,12 +9,38 @@ import (
 
 type ManuscriptReader interface {
 	ListManuscripts(ctx context.Context) ([]ManuscriptSummary, error)
+	ListManuscriptsPaged(ctx context.Context, limit, offset int) ([]ManuscriptSummary, error)
+	CountManuscripts(ctx context.Context) (int, error)
 	GetManuscriptByID(ctx context.Context, msId uint64) (*ManuscriptDetail, error)
+	GetOpenReview(ctx context.Context, msId uint64) (*OpenReview, error)
+}
+
+type OpenReviewEntry struct {
+	ReviewerAddress string  `json:"reviewer_address"`
+	Verdict         string  `json:"verdict"`
+	ReviewCid       *string `json:"review_cid"`
+	TxHash          string  `json:"tx_hash"`
+}
+
+type OpenReviewVersion struct {
+	Version   int               `json:"version"`
+	Date      *time.Time        `json:"date"`
+	Reviewers []string          `json:"reviewers"`
+	Reviews   []OpenReviewEntry `json:"reviews"`
+}
+
+type OpenReview struct {
+	MsId          uint64              `json:"ms_id"`
+	Status        string              `json:"status"`
+	AuthorAddress string              `json:"author_address"`
+	Versions      []OpenReviewVersion `json:"versions"`
+	Reviewers     []string            `json:"reviewers"`
 }
 
 type ManuscriptSummary struct {
 	MsId            uint64     `json:"ms_id"`
 	CID             string     `json:"cid"`
+	Metadata        string     `json:"metadata"`
 	Status          string     `json:"status"`
 	Version         int        `json:"version"`
 	AuthorAddress   string     `json:"author_address"`
@@ -91,7 +117,7 @@ func NewPostgresManuscriptReader(db *sql.DB) *PostgresManuscriptReader {
 
 func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]ManuscriptSummary, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT ms_id, COALESCE(cid,''), COALESCE(status,''), version,
+		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
 		       COALESCE(author_address,''), plagiarism_score,
 		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
 		       submit_timestamp, created_at, updated_at
@@ -106,7 +132,7 @@ func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]Manus
 	for rows.Next() {
 		var ms ManuscriptSummary
 		if err := rows.Scan(
-			&ms.MsId, &ms.CID, &ms.Status, &ms.Version,
+			&ms.MsId, &ms.CID, &ms.Metadata, &ms.Status, &ms.Version,
 			&ms.AuthorAddress, &ms.PlagiarismScore,
 			&ms.SubmitTxHash, &ms.SubmitBlock,
 			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt,
@@ -119,6 +145,135 @@ func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]Manus
 		result = []ManuscriptSummary{}
 	}
 	return result, rows.Err()
+}
+
+func (r *PostgresManuscriptReader) ListManuscriptsPaged(ctx context.Context, limit, offset int) ([]ManuscriptSummary, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
+		       COALESCE(author_address,''), plagiarism_score,
+		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
+		       submit_timestamp, created_at, updated_at
+		FROM manuscripts ORDER BY ms_id DESC LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ManuscriptSummary
+	for rows.Next() {
+		var ms ManuscriptSummary
+		if err := rows.Scan(
+			&ms.MsId, &ms.CID, &ms.Metadata, &ms.Status, &ms.Version,
+			&ms.AuthorAddress, &ms.PlagiarismScore,
+			&ms.SubmitTxHash, &ms.SubmitBlock,
+			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, ms)
+	}
+	if result == nil {
+		result = []ManuscriptSummary{}
+	}
+	return result, rows.Err()
+}
+
+func (r *PostgresManuscriptReader) CountManuscripts(ctx context.Context) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM manuscripts`).Scan(&n)
+	return n, err
+}
+
+// GetOpenReview builds the per-version reviewer reports from the indexed
+// (version-tagged) manuscript_reviewers and reviews rows.
+func (r *PostgresManuscriptReader) GetOpenReview(ctx context.Context, msId uint64) (*OpenReview, error) {
+	var maxVersion int
+	var status, authorAddr string
+	var submitTs *time.Time
+	var createdAt time.Time
+	err := r.db.QueryRowContext(ctx,
+		`SELECT version, COALESCE(status,''), COALESCE(author_address,''), submit_timestamp, created_at FROM manuscripts WHERE ms_id = $1`, msId,
+	).Scan(&maxVersion, &status, &authorAddr, &submitTs, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	revDates := map[int]*time.Time{}
+	rrows, err := r.db.QueryContext(ctx,
+		`SELECT version, revised_at FROM manuscript_revisions WHERE ms_id = $1`, msId)
+	if err != nil {
+		return nil, err
+	}
+	for rrows.Next() {
+		var v int
+		var t time.Time
+		if err := rrows.Scan(&v, &t); err != nil {
+			rrows.Close()
+			return nil, err
+		}
+		tt := t
+		revDates[v] = &tt
+	}
+	rrows.Close()
+
+	out := &OpenReview{MsId: msId, Status: status, AuthorAddress: authorAddr, Versions: []OpenReviewVersion{}}
+	seenReviewer := map[string]bool{}
+
+	for v := 1; v <= maxVersion; v++ {
+		ver := OpenReviewVersion{Version: v, Reviewers: []string{}, Reviews: []OpenReviewEntry{}}
+		if v == 1 {
+			if submitTs != nil {
+				ver.Date = submitTs
+			} else {
+				d := createdAt
+				ver.Date = &d
+			}
+		} else {
+			ver.Date = revDates[v]
+		}
+
+		vr, err := r.db.QueryContext(ctx,
+			`SELECT reviewer_address FROM manuscript_reviewers WHERE ms_id = $1 AND version = $2 ORDER BY reviewer_address`, msId, v)
+		if err != nil {
+			return nil, err
+		}
+		for vr.Next() {
+			var addr string
+			if err := vr.Scan(&addr); err != nil {
+				vr.Close()
+				return nil, err
+			}
+			ver.Reviewers = append(ver.Reviewers, addr)
+			if !seenReviewer[addr] {
+				seenReviewer[addr] = true
+				out.Reviewers = append(out.Reviewers, addr)
+			}
+		}
+		vr.Close()
+
+		er, err := r.db.QueryContext(ctx,
+			`SELECT reviewer_address, verdict, review_cid, COALESCE(tx_hash,'')
+			 FROM reviews WHERE ms_id = $1 AND version = $2`, msId, v)
+		if err != nil {
+			return nil, err
+		}
+		for er.Next() {
+			var e OpenReviewEntry
+			if err := er.Scan(&e.ReviewerAddress, &e.Verdict, &e.ReviewCid, &e.TxHash); err != nil {
+				er.Close()
+				return nil, err
+			}
+			ver.Reviews = append(ver.Reviews, e)
+		}
+		er.Close()
+
+		out.Versions = append(out.Versions, ver)
+	}
+	return out, nil
 }
 
 func (r *PostgresManuscriptReader) GetManuscriptByID(ctx context.Context, msId uint64) (*ManuscriptDetail, error) {
