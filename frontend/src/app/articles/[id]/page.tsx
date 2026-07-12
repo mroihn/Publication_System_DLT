@@ -63,12 +63,6 @@ function parseMeta(metadata: string): { title: string; abstract: string } {
   }
 }
 
-function authorLabel(id: Identity | null, fallback: string): string {
-  if (id?.email) return id.email;
-  const a = id?.real_wallet || fallback;
-  return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—";
-}
-
 export default function ArticleDetailPage() {
   const params = useParams();
   const id = params?.id as string;
@@ -133,14 +127,9 @@ export default function ArticleDetailPage() {
 
             <h1 className="text-2xl font-extrabold text-gray-900 mb-3">{meta.title}</h1>
 
-            <div className="flex items-center gap-2 text-sm text-gray-600 mb-5">
-              <User className="w-4 h-4" />
-              <span className="font-medium text-gray-800">{authorLabel(author, ms.author_address)}</span>
-              {author?.email && (
-                <span className="text-xs text-gray-400 font-mono">
-                  ({author.real_wallet.slice(0, 6)}…{author.real_wallet.slice(-4)})
-                </span>
-              )}
+            <div className="flex items-start gap-2 text-sm text-gray-600 mb-5">
+              <User className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <span className="font-mono text-gray-800 break-all">{author?.real_wallet || ms.author_address}</span>
             </div>
 
             {meta.abstract && <p className="text-gray-700 leading-relaxed mb-6">{meta.abstract}</p>}

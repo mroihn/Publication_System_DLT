@@ -1,12 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  ScrollText,
-  Loader2,
-  ExternalLink,
-  CircleDot,
-} from "lucide-react";
+import { ScrollText, Loader2, Info } from "lucide-react";
 import { apiClient } from "@/core/services/api.client";
 
 interface Identity {
@@ -38,19 +33,30 @@ interface OpenReview {
 
 export type { Identity };
 
-const STATUS: Record<string, { label: string; dot: string; text: string; bg: string }> = {
-  pending: { label: "Pending", dot: "bg-gray-400", text: "text-gray-600", bg: "bg-gray-50 border-gray-200" },
-  submitted: { label: "Submitted", dot: "bg-blue-500", text: "text-blue-700", bg: "bg-blue-50 border-blue-200" },
-  ACCEPT: { label: "Accepted", dot: "bg-green-500", text: "text-green-700", bg: "bg-green-50 border-green-200" },
-  REJECT: { label: "Rejected", dot: "bg-red-500", text: "text-red-700", bg: "bg-red-50 border-red-200" },
-  REVISE: { label: "Revision", dot: "bg-orange-500", text: "text-orange-700", bg: "bg-orange-50 border-orange-200" },
-};
-const st = (s: string) => STATUS[s] ?? STATUS.pending;
+const columnKey = (id: Identity) => (id.real_wallet || id.address || "").toLowerCase();
 
-function name(id: Identity): string {
-  if (id.email) return id.email;
-  const a = id.real_wallet || id.address;
-  return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—";
+function formatDate(date: string | null): string {
+  if (!date) return "—";
+  return new Date(date).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "2-digit",
+  });
+}
+
+const STATUS_LEGEND = "? Not yet submitted   ✓ Approved   ✗ Rejected   ↻ Revision requested";
+
+function reviewerMark(rep: Report | undefined): { symbol: string; className: string; label: string } {
+  if (!rep || rep.status === "pending") {
+    return { symbol: "?", className: "text-gray-400", label: "Not yet submitted" };
+  }
+  if (rep.status === "ACCEPT") {
+    return { symbol: "✓", className: "text-green-600", label: "Approved" };
+  }
+  if (rep.status === "REJECT") {
+    return { symbol: "✗", className: "text-red-600", label: "Rejected" };
+  }
+  return { symbol: "↻", className: "text-amber-600", label: "Revision requested" };
 }
 
 export function OpenReviewPanel({
@@ -74,11 +80,13 @@ export function OpenReviewPanel({
       .finally(() => setLoading(false));
   }, [msId, onAuthor]);
 
-  const latest = data?.versions?.[data.versions.length - 1];
+  const columns = data?.reviewers ?? [];
+  const latestVersion = data?.versions[data.versions.length - 1];
+  const latestByKey = new Map((latestVersion?.reports ?? []).map((rep) => [columnKey(rep.reviewer), rep]));
 
   return (
-    <aside className="bg-white border border-gray-200 rounded-3xl p-6 shadow-sm space-y-6">
-      <div className="flex items-center gap-2">
+    <aside className="bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 px-6 py-4 border-b border-gray-100">
         <ScrollText className="w-5 h-5 text-indigo-600" />
         <h2 className="text-lg font-bold text-gray-900">Open Peer Review</h2>
       </div>
@@ -87,98 +95,125 @@ export function OpenReviewPanel({
         <div className="flex justify-center py-10">
           <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
         </div>
-      ) : !data || data.reviewers.length === 0 ? (
-        <p className="text-sm text-gray-500">No reviewers have been assigned yet.</p>
+      ) : !data || columns.length === 0 ? (
+        <p className="px-6 py-6 text-sm text-gray-500">No reviewers have been assigned yet.</p>
       ) : (
         <>
-          {/* Reviewer status */}
-          <section>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Reviewer Status</h3>
-            <div className="flex flex-wrap gap-2">
-              {(latest?.reports ?? []).map((r, i) => {
-                const s = st(r.status);
+          <section className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-700">Reviewer Status</h3>
+            <div className="flex items-center gap-3">
+              {columns.map((r) => {
+                const mark = reviewerMark(latestByKey.get(columnKey(r)));
                 return (
                   <span
-                    key={i}
-                    title={`${name(r.reviewer)} — ${s.label}`}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium ${s.bg} ${s.text}`}
+                    key={columnKey(r)}
+                    title={mark.label}
+                    className={`font-bold text-lg leading-none ${mark.className}`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${s.dot}`} />
-                    {name(r.reviewer)}
+                    {mark.symbol}
                   </span>
                 );
               })}
             </div>
-            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 text-[11px] text-gray-500">
-              {Object.values(STATUS).map((s) => (
-                <span key={s.label} className="inline-flex items-center gap-1">
-                  <span className={`w-2 h-2 rounded-full ${s.dot}`} /> {s.label}
-                </span>
-              ))}
+            <span className="ml-auto text-gray-400" title={STATUS_LEGEND}>
+              <Info className="w-5 h-5" />
+            </span>
+          </section>
+
+          <section className="px-6 py-4 border-b border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">Reviewer Reports</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr>
+                    <th className="w-px" />
+                    <th
+                      colSpan={columns.length}
+                      className="pb-1 text-center text-sm font-medium italic text-gray-500"
+                    >
+                      Invited Reviewers
+                    </th>
+                  </tr>
+                  <tr className="text-gray-500">
+                    <th className="w-px" />
+                    {columns.map((r, i) => (
+                      <th
+                        key={columnKey(r)}
+                        className={`px-3 py-1 text-center font-medium ${i > 0 ? "border-l border-gray-100" : ""}`}
+                      >
+                        {i + 1}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.versions
+                    .slice()
+                    .reverse()
+                    .map((v) => {
+                      const byKey = new Map(v.reports.map((rep) => [columnKey(rep.reviewer), rep]));
+                      return (
+                        <tr key={v.version} className="border-t border-gray-100 align-top">
+                          <td className="py-3 pr-4 whitespace-nowrap">
+                            <div className="font-semibold text-indigo-600">Version {v.version}</div>
+                            {v.version > 1 && <div className="text-xs text-gray-500">(revision)</div>}
+                            <div className="text-xs text-gray-500">{formatDate(v.date)}</div>
+                          </td>
+                          {columns.map((r, i) => {
+                            const rep = byKey.get(columnKey(r));
+                            const mark = reviewerMark(rep);
+                            return (
+                              <td
+                                key={columnKey(r)}
+                                className={`px-3 py-3 text-center ${i > 0 ? "border-l border-gray-100" : ""}`}
+                              >
+                                {rep ? (
+                                  <div className="flex flex-col items-center gap-0.5">
+                                    <span
+                                      title={mark.label}
+                                      className={`font-bold text-lg leading-none ${mark.className}`}
+                                    >
+                                      {mark.symbol}
+                                    </span>
+                                    {rep.status !== "pending" && (
+                                      rep.review_cid ? (
+                                        <a
+                                          href={`https://ipfs.io/ipfs/${rep.review_cid}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                        >
+                                          read
+                                        </a>
+                                      ) : (
+                                        <span className="text-xs text-gray-300">read</span>
+                                      )
+                                    )}
+                                  </div>
+                                ) : null}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
             </div>
           </section>
 
-          {/* Reports by version */}
-          <section className="space-y-4">
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Reviewer Reports</h3>
-            {data.versions
-              .slice()
-              .reverse()
-              .map((v) => (
-                <div key={v.version} className="border border-gray-100 rounded-2xl overflow-hidden">
-                  <div className="flex items-center justify-between bg-gray-50 px-4 py-2 border-b border-gray-100">
-                    <span className="text-sm font-semibold text-gray-900">Version {v.version}</span>
-                    <span className="text-xs text-gray-400">
-                      {v.date ? new Date(v.date).toLocaleDateString() : "—"}
-                    </span>
-                  </div>
-                  <div className="divide-y divide-gray-50">
-                    {v.reports.length === 0 ? (
-                      <p className="px-4 py-3 text-xs text-gray-400">No reviewers recorded for this version.</p>
-                    ) : (
-                      v.reports.map((r, i) => {
-                        const s = st(r.status);
-                        return (
-                          <div key={i} className="flex items-center justify-between px-4 py-2.5 gap-3">
-                            <span className="inline-flex items-center gap-2 min-w-0">
-                              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.dot}`} />
-                              <span className="text-sm text-gray-700 truncate">{name(r.reviewer)}</span>
-                            </span>
-                            {r.review_cid ? (
-                              <a
-                                href={`https://ipfs.io/ipfs/${r.review_cid}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 flex-shrink-0"
-                              >
-                                Read <ExternalLink className="w-3 h-3" />
-                              </a>
-                            ) : (
-                              <span className="text-xs text-gray-400 flex-shrink-0">Pending</span>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              ))}
-          </section>
-
-          {/* Reviewer identities */}
-          <section>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Reviewers</h3>
-            <ul className="space-y-2">
-              {data.reviewers.map((r, i) => (
-                <li key={i} className="flex items-center gap-2 text-sm">
-                  <CircleDot className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+          <section className="px-6 py-4">
+            <ol className="space-y-3">
+              {columns.map((r, i) => (
+                <li key={columnKey(r)} className="flex gap-2 text-sm">
+                  <span className="text-gray-500 font-medium">{i + 1}.</span>
                   <div className="min-w-0">
-                    <p className="text-gray-800 truncate">{r.email || "Unregistered reviewer"}</p>
-                    <p className="text-xs text-gray-400 font-mono truncate">{r.real_wallet || r.address}</p>
+                    <p className="font-semibold text-gray-900">{r.email || "Unregistered reviewer"}</p>
+                    <p className="text-xs text-gray-400 font-mono break-all">{r.real_wallet || r.address}</p>
                   </div>
                 </li>
               ))}
-            </ul>
+            </ol>
           </section>
         </>
       )}
