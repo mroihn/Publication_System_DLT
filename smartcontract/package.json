@@ -5,6 +5,7 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "test:gas": "REPORT_GAS=true hardhat test",
     "deploy:local": "hardhat run scripts/deploy.js",
     "deploy:amoy": "hardhat run scripts/deploy.js --network amoy",
     "upgrade:amoy": "hardhat run scripts/upgrade.js --network amoy"

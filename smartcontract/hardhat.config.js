@@ -33,6 +33,16 @@ module.exports = {
   etherscan: {
     apiKey: ETHERSCAN_API_KEY,
   },
+  // Gas usage report for the cost analysis. Off by default so the normal test run
+  // stays quiet; enable with: npm run test:gas
+  gasReporter: {
+    enabled: process.env.REPORT_GAS === "true",
+    currency: "USD",
+    noColors: true,
+    outputFile: "gas-report.txt",
+    // Offline-friendly: skip remote price/gas lookups so the report works without network
+    offline: true,
+  },
   paths: {
     sources: "./contracts",
     tests: "./test",
