@@ -23,6 +23,7 @@ const (
 
 	registryABIJSON = `[
 		{"inputs":[{"name":"cid","type":"string"},{"name":"metadata","type":"string"},{"name":"nonce","type":"uint256"},{"name":"v","type":"uint8"},{"name":"r","type":"bytes32"},{"name":"s","type":"bytes32"}],"name":"submitManuscript","outputs":[{"name":"","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},
+		{"inputs":[{"name":"msId","type":"uint256"},{"name":"newCid","type":"string"},{"name":"nonce","type":"uint256"},{"name":"v","type":"uint8"},{"name":"r","type":"bytes32"},{"name":"s","type":"bytes32"}],"name":"reviseManuscript","outputs":[],"stateMutability":"nonpayable","type":"function"},
 		{"inputs":[{"name":"msId","type":"uint256"},{"name":"reviewCid","type":"string"},{"name":"verdict","type":"uint8"},{"name":"comments","type":"string"},{"name":"nonce","type":"uint256"},{"name":"v","type":"uint8"},{"name":"r","type":"bytes32"},{"name":"s","type":"bytes32"}],"name":"submitReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
 		{"inputs":[{"name":"msId","type":"uint256"},{"name":"approve","type":"bool"},{"name":"field","type":"string"},{"name":"editorCid","type":"string"}],"name":"submitEditorReview","outputs":[],"stateMutability":"nonpayable","type":"function"},
 		{"inputs":[{"name":"reviewer","type":"address"},{"name":"fields","type":"string[]"}],"name":"verifyReviewerFields","outputs":[],"stateMutability":"nonpayable","type":"function"},
@@ -235,6 +236,14 @@ func (s *EthereumService) SubmitManuscript(cid, metadata, signature string, nonc
 		return "", fmt.Errorf("split signature: %w", err)
 	}
 	return s.sendTx("submitManuscript", cid, metadata, new(big.Int).SetUint64(nonce), v, r, sv)
+}
+
+func (s *EthereumService) ReviseManuscript(msId uint64, newCid, signature string, nonce uint64) (string, error) {
+	v, r, sv, err := splitSig(signature)
+	if err != nil {
+		return "", fmt.Errorf("split signature: %w", err)
+	}
+	return s.sendTx("reviseManuscript", new(big.Int).SetUint64(msId), newCid, new(big.Int).SetUint64(nonce), v, r, sv)
 }
 
 func (s *EthereumService) SubmitReview(msId uint64, reviewCid, comments, signature string, nonce uint64, verdict uint8) (string, error) {

@@ -144,6 +144,7 @@ func main() {
 			manuscripts.GET("/:id/comments", articleHandler.ListComments)
 			manuscripts.POST("/upload/file", manuscriptHandler.UploadFile)
 			manuscripts.POST("/submit", jwtMW, manuscriptHandler.Submit)
+			manuscripts.POST("/:id/revise", jwtMW, manuscriptHandler.Revise)
 			manuscripts.POST("/:id/reviews", jwtMW, middleware.RequireRole("reviewer"), manuscriptHandler.SubmitReview)
 		}
 

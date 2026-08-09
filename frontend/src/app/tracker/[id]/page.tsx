@@ -458,6 +458,30 @@ export default function ManuscriptDetailPage() {
         </div>
       )}
 
+      {/* Revise manuscript (author action, status REVISION_REQUESTED) */}
+      {ms.status === "REVISION_REQUESTED" && (
+        <div className="bg-white border-2 border-orange-200 rounded-3xl p-8 shadow-sm">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center flex-shrink-0">
+              <GitCommit className="w-5 h-5 text-orange-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Revision Requested</h2>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Reviewers requested changes. Upload a revised manuscript to send it back through plagiarism
+                and peer review as version {ms.version + 1}.
+              </p>
+            </div>
+          </div>
+          <Link
+            href={`/author/revise?id=${ms.ms_id}`}
+            className="inline-flex items-center gap-2 px-6 py-3 bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+          >
+            <GitCommit className="w-4 h-4" /> Submit Revision
+          </Link>
+        </div>
+      )}
+
       {/* Published — DOI + NFT (status PUBLISHED) */}
       {ms.status === "PUBLISHED" && ms.doi && (
         <div className="bg-gradient-to-br from-indigo-50 to-white border-2 border-indigo-200 rounded-3xl p-8 shadow-sm">

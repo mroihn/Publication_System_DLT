@@ -14,6 +14,7 @@ type StorageService interface {
 
 type ContractService interface {
 	SubmitManuscript(cid, title, signature string, nonce uint64) (string, error)
+	ReviseManuscript(msId uint64, newCid, signature string, nonce uint64) (string, error)
 	SubmitReview(msId uint64, reviewCid, comments, signature string, nonce uint64, verdict uint8) (string, error)
 }
 
@@ -48,6 +49,18 @@ func (uc *ManuscriptUseCase) SubmitOnChain(cid, metadata, signature string, nonc
 	}
 	fmt.Printf("Manuscript submitted: cid=%s txHash=%s\n", cid, txHash)
 	return &SubmitResult{CID: cid, TxHash: txHash, Status: "CHECKING"}, nil
+}
+
+// ReviseOnChain submits a pre-uploaded revised manuscript to the smart contract.
+// Only valid while the manuscript is in REVISION_REQUESTED state; the signature
+// must come from the same burner author wallet that originally submitted it.
+func (uc *ManuscriptUseCase) ReviseOnChain(msId uint64, newCid, signature string, nonce uint64) (*SubmitResult, error) {
+	txHash, err := uc.contract.ReviseManuscript(msId, newCid, signature, nonce)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("Manuscript revised: msId=%d cid=%s txHash=%s\n", msId, newCid, txHash)
+	return &SubmitResult{CID: newCid, TxHash: txHash, Status: "CHECKING"}, nil
 }
 
 func (uc *ManuscriptUseCase) List(ctx context.Context) ([]repository.ManuscriptSummary, error) {

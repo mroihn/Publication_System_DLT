@@ -117,6 +117,47 @@ func (h *ManuscriptHandler) Submit(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+type reviseManuscriptRequest struct {
+	NewCID    string `json:"newCid"`    // CID of the newly uploaded revision, IPFS
+	Signature string `json:"signature"` // 0x-prefixed 65-byte hex from the original SubmissionWallet
+	Nonce     string `json:"nonce"`     // uint256 as decimal string (BigInt from JS)
+}
+
+// Revise relays a signed manuscript revision to the smart contract. No new
+// wallet mapping is recorded — the author burner address is already on file
+// from the original submission.
+func (h *ManuscriptHandler) Revise(c *gin.Context) {
+	msId, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid manuscript id"})
+		return
+	}
+
+	var req reviseManuscriptRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if req.NewCID == "" || req.Signature == "" || req.Nonce == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "newCid, signature, and nonce are required"})
+		return
+	}
+
+	nonce, err := strconv.ParseUint(req.Nonce, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid nonce: must be a decimal integer"})
+		return
+	}
+
+	result, err := h.manuscriptUC.ReviseOnChain(msId, req.NewCID, req.Signature, nonce)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 type submitReviewRequest struct {
 	Verdict   int    `json:"verdict"`
 	Comments  string `json:"comments"`
