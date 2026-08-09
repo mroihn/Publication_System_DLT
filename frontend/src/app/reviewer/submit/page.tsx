@@ -1,14 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { CheckCircle, MessageSquare } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CheckCircle, Loader2, MessageSquare } from "lucide-react";
 import { useAuth } from "@/core/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/core/context/ToastContext";
 import { apiClient } from "@/core/services/api.client";
 
 export default function SubmitReviewPage() {
-  const { isAuthenticated: isConnected } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const { addToast } = useToast();
 
@@ -17,13 +17,16 @@ export default function SubmitReviewPage() {
   const [critique, setCritique] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  if (!isConnected) {
+  useEffect(() => {
+    if (isLoading) return;
+    if (!isAuthenticated) { router.push("/login"); return; }
+    if (user?.role !== "reviewer") { router.push("/profile"); return; }
+  }, [isAuthenticated, isLoading, user, router]);
+
+  if (isLoading || !isAuthenticated || user?.role !== "reviewer") {
     return (
-      <div className="flex-1 flex items-center justify-center p-4">
-        <div className="text-center space-y-4">
-          <h2 className="text-2xl font-semibold text-white">Wallet Not Connected</h2>
-          <p className="text-slate-400">Please connect your Web3 wallet to submit a review.</p>
-        </div>
+      <div className="flex justify-center py-24">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
       </div>
     );
   }

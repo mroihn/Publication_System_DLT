@@ -9,8 +9,11 @@ import (
 
 type ManuscriptReader interface {
 	ListManuscripts(ctx context.Context) ([]ManuscriptSummary, error)
-	ListManuscriptsPaged(ctx context.Context, limit, offset int) ([]ManuscriptSummary, error)
-	CountManuscripts(ctx context.Context) (int, error)
+	// ListManuscriptsPaged lists manuscripts, optionally filtered by status
+	// (empty string = no filter). Backs both the Tracker (all statuses) and
+	// the Explore hub (status=PUBLISHED) via the same endpoint.
+	ListManuscriptsPaged(ctx context.Context, limit, offset int, status string) ([]ManuscriptSummary, error)
+	CountManuscripts(ctx context.Context, status string) (int, error)
 	GetManuscriptByID(ctx context.Context, msId uint64) (*ManuscriptDetail, error)
 	GetOpenReview(ctx context.Context, msId uint64) (*OpenReview, error)
 }
@@ -147,14 +150,20 @@ func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]Manus
 	return result, rows.Err()
 }
 
-func (r *PostgresManuscriptReader) ListManuscriptsPaged(ctx context.Context, limit, offset int) ([]ManuscriptSummary, error) {
-	rows, err := r.db.QueryContext(ctx, `
+func (r *PostgresManuscriptReader) ListManuscriptsPaged(ctx context.Context, limit, offset int, status string) ([]ManuscriptSummary, error) {
+	query := `
 		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
 		       COALESCE(author_address,''), plagiarism_score,
 		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
 		       submit_timestamp, created_at, updated_at
-		FROM manuscripts ORDER BY ms_id DESC LIMIT $1 OFFSET $2
-	`, limit, offset)
+		FROM manuscripts`
+	args := []any{limit, offset}
+	if status != "" {
+		query += ` WHERE status = $3`
+		args = append(args, status)
+	}
+	query += ` ORDER BY ms_id DESC LIMIT $1 OFFSET $2`
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -179,9 +188,15 @@ func (r *PostgresManuscriptReader) ListManuscriptsPaged(ctx context.Context, lim
 	return result, rows.Err()
 }
 
-func (r *PostgresManuscriptReader) CountManuscripts(ctx context.Context) (int, error) {
+func (r *PostgresManuscriptReader) CountManuscripts(ctx context.Context, status string) (int, error) {
+	query := `SELECT count(*) FROM manuscripts`
+	args := []any{}
+	if status != "" {
+		query += ` WHERE status = $1`
+		args = append(args, status)
+	}
 	var n int
-	err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM manuscripts`).Scan(&n)
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&n)
 	return n, err
 }
 

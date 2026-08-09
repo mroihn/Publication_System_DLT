@@ -55,13 +55,14 @@ func (h *ArticleHandler) List(c *gin.Context) {
 	if limit < 1 || limit > 100 {
 		limit = 12
 	}
+	status := c.Query("status") // e.g. "PUBLISHED" for the Explore hub; empty = all statuses (Tracker)
 
-	items, err := h.reader.ListManuscriptsPaged(c.Request.Context(), limit, (page-1)*limit)
+	items, err := h.reader.ListManuscriptsPaged(c.Request.Context(), limit, (page-1)*limit, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	total, err := h.reader.CountManuscripts(c.Request.Context())
+	total, err := h.reader.CountManuscripts(c.Request.Context(), status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

@@ -623,9 +623,9 @@ export default function ManuscriptDetailPage() {
             <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-indigo-100" />
             <ul className="space-y-6">
               {ms.events.map((ev, i) => (
-                <li key={i} className="relative flex gap-4">
+                <li key={i} className="relative">
                   <div className="absolute -left-4 top-0.5 w-4 h-4 rounded-full bg-indigo-600 ring-4 ring-white" />
-                  <div>
+                  <div className="pl-2">
                     <p className="text-sm font-medium text-gray-900">
                       {ev.event_name.replace(/([A-Z])/g, " $1").trim()}
                     </p>
@@ -647,11 +647,11 @@ export default function ManuscriptDetailPage() {
             <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-indigo-100" />
             <ul className="space-y-6">
               {timeline.map((ev, i) => (
-                <li key={i} className="relative flex gap-4">
+                <li key={i} className="relative">
                   <div className="absolute -left-4 top-0.5 w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center text-white ring-4 ring-white">
                     <span className="scale-75">{ev.icon}</span>
                   </div>
-                  <div>
+                  <div className="pl-2">
                     <p className="text-sm font-medium text-gray-900">{ev.label}</p>
                     <p className="text-xs text-gray-400 mt-0.5">{fmt(ev.time)}</p>
                     {ev.txHash && (

@@ -83,8 +83,12 @@ export default function EditorDashboardPage() {
 
   useEffect(() => {
     if (isLoading) return;
-    if (!isAuthenticated || user?.role !== "editor") {
+    if (!isAuthenticated) {
       router.push("/login");
+      return;
+    }
+    if (user?.role !== "editor") {
+      router.push("/profile");
       return;
     }
     load()

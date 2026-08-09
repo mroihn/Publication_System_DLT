@@ -26,7 +26,7 @@ function fmtJrt(wei: bigint): string {
 }
 
 export default function ReviewerEarningsPage() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const { addToast } = useToast();
 
@@ -55,6 +55,10 @@ export default function ReviewerEarningsPage() {
       router.push("/login");
       return;
     }
+    if (user?.role !== "reviewer") {
+      router.push("/profile");
+      return;
+    }
     // setState is kept inside the promise callbacks (not called synchronously in
     // the effect body) to satisfy the react-hooks/set-state-in-effect rule.
     apiClient
@@ -72,7 +76,7 @@ export default function ReviewerEarningsPage() {
       })
       .catch(() => addToast("Failed to load your reviewer earnings.", "error"))
       .finally(() => setLoading(false));
-  }, [isAuthenticated, isLoading, router, addToast, loadBalances]);
+  }, [isAuthenticated, isLoading, user, router, addToast, loadBalances]);
 
   const handleWithdraw = useCallback(
     async (a: ReviewerAssignment) => {

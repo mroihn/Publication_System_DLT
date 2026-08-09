@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { apiClient } from "@/core/services/api.client";
 import { getNonce, signTypedDataWith } from "@/core/services/wallet";
+import { useAuth } from "@/core/context/AuthContext";
 
 interface ReviewerAssignment {
   ms_id: number;
@@ -130,6 +131,8 @@ function truncateAddr(addr: string) {
 export default function ReviewManuscriptPage() {
   const params = useParams();
   const msId = params?.msId as string;
+  const router = useRouter();
+  const { user, isAuthenticated, isLoading } = useAuth();
 
   // Manuscript fetch
   const [ms, setMs] = useState<ManuscriptDetail | null>(null);
@@ -157,12 +160,18 @@ export default function ReviewManuscriptPage() {
   }, [msId]);
 
   useEffect(() => {
-    if (!msId) return;
+    if (isLoading) return;
+    if (!isAuthenticated) { router.push("/login"); return; }
+    if (user?.role !== "reviewer") { router.push("/profile"); return; }
+  }, [isAuthenticated, isLoading, user, router]);
+
+  useEffect(() => {
+    if (!msId || isLoading || !isAuthenticated || user?.role !== "reviewer") return;
     fetchMs()
       .then((data) => setMs(data))
       .catch(() => setLoadError("Failed to load manuscript."))
       .finally(() => setLoadingMs(false));
-  }, [fetchMs, msId]);
+  }, [fetchMs, msId, isLoading, isAuthenticated, user]);
 
   // Poll until the new review appears in the DB
   const startPolling = useCallback(
@@ -246,7 +255,7 @@ export default function ReviewManuscriptPage() {
 
   // ── Loading / error states ──────────────────────────────────────────────────
 
-  if (loadingMs) {
+  if (isLoading || !isAuthenticated || user?.role !== "reviewer" || loadingMs) {
     return (
       <div className="flex justify-center py-24">
         <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />

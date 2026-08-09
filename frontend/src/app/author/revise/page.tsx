@@ -6,19 +6,34 @@ import { useAuth } from "@/core/context/AuthContext";
 import { useRouter } from "next/navigation";
 
 export default function ReviseManuscriptPage() {
-  const { isAuthenticated: isConnected } = useAuth();
+  const { isAuthenticated: isConnected, isLoading } = useAuth();
   const router = useRouter();
-  
+
   const [manuscriptId, setManuscriptId] = useState("");
   const [revisionNotes, setRevisionNotes] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-8 min-h-[50vh]">
+        <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   if (!isConnected) {
     return (
-      <div className="flex-1 flex items-center justify-center p-4">
-        <div className="text-center space-y-4">
-          <h2 className="text-2xl font-semibold text-white">Wallet Not Connected</h2>
-          <p className="text-slate-400">Please connect your Web3 wallet to revise a manuscript.</p>
+      <div className="flex-1 flex items-center justify-center p-4 bg-gray-50">
+        <div className="text-center space-y-4 max-w-md bg-white p-8 rounded-xl shadow-sm border border-gray-200">
+          <h2 className="text-2xl font-bold text-gray-900">Authentication Required</h2>
+          <p className="text-gray-600">Please login to your account to revise a manuscript.</p>
+          <button
+            onClick={() => router.push("/login")}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+          >
+            Go to Login
+          </button>
         </div>
       </div>
     );
@@ -35,20 +50,20 @@ export default function ReviseManuscriptPage() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto w-full p-6">
+    <div className="max-w-3xl mx-auto w-full p-6 py-12">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white flex items-center space-x-3">
-          <Edit3 className="w-8 h-8 text-indigo-400" />
+        <h1 className="text-3xl font-extrabold text-gray-900 flex items-center space-x-3">
+          <Edit3 className="w-8 h-8 text-indigo-600" />
           <span>Revise Manuscript</span>
         </h1>
-        <p className="text-slate-400 mt-2">
+        <p className="text-gray-600 mt-2 text-lg">
           Submit an updated version of your manuscript based on reviewer feedback.
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-xl space-y-6">
+      <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-2xl p-8 shadow-sm space-y-6">
         <div>
-          <label htmlFor="manuscriptId" className="block text-sm font-medium text-slate-300 mb-2">
+          <label htmlFor="manuscriptId" className="block text-sm font-medium text-gray-700 mb-2">
             Manuscript ID
           </label>
           <input
@@ -57,13 +72,13 @@ export default function ReviseManuscriptPage() {
             required
             value={manuscriptId}
             onChange={(e) => setManuscriptId(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+            className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm"
             placeholder="e.g., 1"
           />
         </div>
 
         <div>
-          <label htmlFor="revisionNotes" className="block text-sm font-medium text-slate-300 mb-2">
+          <label htmlFor="revisionNotes" className="block text-sm font-medium text-gray-700 mb-2">
             Revision Notes
           </label>
           <textarea
@@ -72,26 +87,30 @@ export default function ReviseManuscriptPage() {
             rows={4}
             value={revisionNotes}
             onChange={(e) => setRevisionNotes(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all resize-none"
+            className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all resize-none shadow-sm"
             placeholder="Describe the changes made in this revision..."
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-2">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
             Upload Revised PDF Document
           </label>
-          <div className="border-2 border-dashed border-slate-700 rounded-xl p-8 text-center hover:bg-slate-800/50 transition-colors cursor-pointer group">
-            <UploadCloud className="w-12 h-12 text-slate-500 mx-auto mb-4 group-hover:text-indigo-400 transition-colors" />
-            <p className="text-slate-300 font-medium">Drag & drop your revised PDF here</p>
-          </div>
+          <label htmlFor="file-upload" className="block border-2 border-dashed border-gray-300 rounded-xl p-8 text-center bg-gray-50 hover:bg-gray-100 transition-colors cursor-pointer group">
+            <UploadCloud className="w-12 h-12 text-gray-400 mx-auto mb-4 group-hover:text-indigo-500 transition-colors" />
+            <p className="text-gray-700 font-medium">
+              {file ? file.name : "Drag & drop your revised PDF here"}
+            </p>
+            {!file && <p className="text-gray-500 text-sm mt-1">or click to browse from your computer</p>}
+            <input id="file-upload" type="file" accept=".pdf" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} required />
+          </label>
         </div>
 
-        <div className="pt-4 border-t border-slate-800 flex justify-end">
+        <div className="pt-6 border-t border-gray-200 flex justify-end">
           <button
             type="submit"
             disabled={isSubmitting}
-            className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-8 py-3 rounded-xl font-medium transition-all"
+            className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-3 rounded-lg font-medium transition-all shadow-sm"
           >
             {isSubmitting ? (
               <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />

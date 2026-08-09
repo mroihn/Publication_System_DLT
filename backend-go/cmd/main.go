@@ -144,7 +144,7 @@ func main() {
 			manuscripts.GET("/:id/comments", articleHandler.ListComments)
 			manuscripts.POST("/upload/file", manuscriptHandler.UploadFile)
 			manuscripts.POST("/submit", jwtMW, manuscriptHandler.Submit)
-			manuscripts.POST("/:id/reviews", manuscriptHandler.SubmitReview)
+			manuscripts.POST("/:id/reviews", jwtMW, middleware.RequireRole("reviewer"), manuscriptHandler.SubmitReview)
 		}
 
 		v1.POST("/comments/prepare", jwtMW, articleHandler.PrepareComment)
@@ -152,14 +152,15 @@ func main() {
 		// Oracle → backend: mint reviewer burner wallets (shared-secret guarded).
 		v1.POST("/internal/reviewer-sessions", sessionHandler.CreateReviewerSessions)
 
+		requireReviewer := middleware.RequireRole("reviewer")
 		// Reviewer fetches their burner session wallets to sign reviews.
-		v1.GET("/reviewer/assignments", jwtMW, sessionHandler.GetAssignments)
+		v1.GET("/reviewer/assignments", jwtMW, requireReviewer, sessionHandler.GetAssignments)
 		// Reviewer views + (re)submits specialization fields for editor verification.
-		v1.GET("/reviewer/specialization", jwtMW, editorHandler.GetReviewerSpecialization)
-		v1.POST("/reviewer/specialization", jwtMW, editorHandler.SubmitReviewerFields)
+		v1.GET("/reviewer/specialization", jwtMW, requireReviewer, editorHandler.GetReviewerSpecialization)
+		v1.POST("/reviewer/specialization", jwtMW, requireReviewer, editorHandler.SubmitReviewerFields)
 
 		// Editor: reviewer specialization verification + manuscript screening.
-		editor := v1.Group("/editor", jwtMW)
+		editor := v1.Group("/editor", jwtMW, middleware.RequireRole("editor"))
 		{
 			editor.GET("/reviewer-verifications", editorHandler.ListReviewerVerifications)
 			editor.POST("/reviewer-verifications/:id/decision", editorHandler.DecideReviewerVerification)

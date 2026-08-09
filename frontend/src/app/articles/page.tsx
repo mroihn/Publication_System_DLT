@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { BookOpen, Loader2, ChevronLeft, ChevronRight, Search, Filter } from "lucide-react";
+import { BookOpen, Loader2, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { apiClient } from "@/core/services/api.client";
 
 interface Identity {
@@ -24,17 +24,6 @@ interface Article {
 }
 
 const LIMIT = 9;
-
-const STATUS_OPTIONS = [
-  "All",
-  "CHECKING",
-  "PENDING_EDITOR",
-  "UNDER_REVIEW",
-  "REVISION_REQUESTED",
-  "ACCEPTED",
-  "PUBLISHED",
-  "REJECTED",
-];
 
 function identityLabel(id: Identity): string {
   if (id.email) return id.email;
@@ -65,12 +54,11 @@ export default function ArticlesHubPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterStatus, setFilterStatus] = useState("All");
 
   useEffect(() => {
     let active = true;
     apiClient
-      .get<{ data: Article[]; total: number }>(`/manuscripts?page=${page}&limit=${LIMIT}`)
+      .get<{ data: Article[]; total: number }>(`/manuscripts?page=${page}&limit=${LIMIT}&status=PUBLISHED`)
       .then((res) => {
         if (!active) return;
         setArticles(res.data.data);
@@ -87,12 +75,8 @@ export default function ArticlesHubPage() {
   }, []);
 
   const filteredArticles = useMemo(() => {
-    return articles.filter((a) => {
-      const matchesSearch = a.title.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesFilter = filterStatus === "All" || a.status === filterStatus;
-      return matchesSearch && matchesFilter;
-    });
-  }, [articles, searchQuery, filterStatus]);
+    return articles.filter((a) => a.title.toLowerCase().includes(searchQuery.toLowerCase()));
+  }, [articles, searchQuery]);
 
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
 
@@ -107,29 +91,15 @@ export default function ArticlesHubPage() {
           <p className="text-gray-600 mt-2 text-lg">Explore decentralized academic publications and peer reviews.</p>
         </div>
 
-        <div className="flex items-center space-x-4 w-full md:w-auto">
-          <div className="relative flex-1 md:w-64">
-            <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search articles..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white border border-gray-300 rounded-lg pl-10 pr-4 py-2 text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm"
-            />
-          </div>
-          <div className="relative">
-            <Filter className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="appearance-none bg-white border border-gray-300 rounded-lg pl-10 pr-8 py-2 text-gray-900 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer shadow-sm"
-            >
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>{s === "All" ? "All Status" : s.replace(/_/g, " ")}</option>
-              ))}
-            </select>
-          </div>
+        <div className="relative w-full md:w-64">
+          <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search articles..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-white border border-gray-300 rounded-lg pl-10 pr-4 py-2 text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm"
+          />
         </div>
       </header>
 
