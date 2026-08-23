@@ -17,13 +17,13 @@ func NewPostgresUserRepository(db *sql.DB) *PostgresUserRepository {
 	return &PostgresUserRepository{db: db}
 }
 
-const userSelectCols = `id, email, password_hash, wallet_address, role, specialities, verified_fields`
+const userSelectCols = `id, email, password_hash, wallet_address, role, specialities, verified_fields, identity_provider, identity_subject, identity_email`
 
-// scanUser reads a single user row selected with userSelectCols.
 func scanUser(row *sql.Row) (*domain.User, error) {
 	u := &domain.User{}
-	var wallet sql.NullString
-	err := row.Scan(&u.ID, &u.Email, &u.Password, &wallet, &u.Role, pq.Array(&u.Specialities), pq.Array(&u.VerifiedFields))
+	var wallet, identityProvider, identitySubject, identityEmail sql.NullString
+	err := row.Scan(&u.ID, &u.Email, &u.Password, &wallet, &u.Role, pq.Array(&u.Specialities), pq.Array(&u.VerifiedFields),
+		&identityProvider, &identitySubject, &identityEmail)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -31,6 +31,9 @@ func scanUser(row *sql.Row) (*domain.User, error) {
 		return nil, err
 	}
 	u.WalletAddress = wallet.String
+	u.IdentityProvider = identityProvider.String
+	u.IdentitySubject = identitySubject.String
+	u.IdentityEmail = identityEmail.String
 	return u, nil
 }
 
@@ -52,6 +55,12 @@ func (r *PostgresUserRepository) FindByWalletAddress(address string) (*domain.Us
 	))
 }
 
+func (r *PostgresUserRepository) FindByIdentity(provider, subject string) (*domain.User, error) {
+	return scanUser(r.db.QueryRow(
+		`SELECT `+userSelectCols+` FROM users WHERE identity_provider = $1 AND identity_subject = $2`, provider, subject,
+	))
+}
+
 func (r *PostgresUserRepository) Save(user *domain.User) (*domain.User, error) {
 	if user.ID == "" {
 		user.ID = uuid.New().String()
@@ -68,17 +77,31 @@ func (r *PostgresUserRepository) Save(user *domain.User) (*domain.User, error) {
 	if user.WalletAddress != "" {
 		wallet = sql.NullString{String: user.WalletAddress, Valid: true}
 	}
+	var identityProvider, identitySubject, identityEmail sql.NullString
+	if user.IdentityProvider != "" {
+		identityProvider = sql.NullString{String: user.IdentityProvider, Valid: true}
+	}
+	if user.IdentitySubject != "" {
+		identitySubject = sql.NullString{String: user.IdentitySubject, Valid: true}
+	}
+	if user.IdentityEmail != "" {
+		identityEmail = sql.NullString{String: user.IdentityEmail, Valid: true}
+	}
 	_, err := r.db.Exec(
-		`INSERT INTO users (id, email, password_hash, wallet_address, role, specialities, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		`INSERT INTO users (id, email, password_hash, wallet_address, role, specialities, identity_provider, identity_subject, identity_email, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 		 ON CONFLICT (id) DO UPDATE SET
-		   email          = EXCLUDED.email,
-		   password_hash  = EXCLUDED.password_hash,
-		   wallet_address = EXCLUDED.wallet_address,
-		   role           = EXCLUDED.role,
-		   specialities   = EXCLUDED.specialities,
-		   updated_at     = NOW()`,
+		   email             = EXCLUDED.email,
+		   password_hash     = EXCLUDED.password_hash,
+		   wallet_address    = EXCLUDED.wallet_address,
+		   role              = EXCLUDED.role,
+		   specialities      = EXCLUDED.specialities,
+		   identity_provider = EXCLUDED.identity_provider,
+		   identity_subject  = EXCLUDED.identity_subject,
+		   identity_email    = EXCLUDED.identity_email,
+		   updated_at        = NOW()`,
 		user.ID, user.Email, user.Password, wallet, user.Role, pq.Array(specialities),
+		identityProvider, identitySubject, identityEmail,
 	)
 	if err != nil {
 		return nil, err

@@ -31,6 +31,8 @@ interface Verification {
   fields: string[];
   status: string;
   created_at: string;
+  current_role: string;
+  identity_email: string;
 }
 
 interface PendingManuscript {
@@ -216,7 +218,19 @@ export default function EditorDashboardPage() {
                 className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex flex-wrap items-center gap-4"
               >
                 <div className="min-w-0">
-                  <p className="font-semibold text-gray-900">{v.email}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold text-gray-900">{v.email}</p>
+                    {v.current_role === "user" && (
+                      <span className="text-xs bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 font-medium">
+                        user → reviewer
+                      </span>
+                    )}
+                    {v.identity_email && (
+                      <span className="text-xs bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-medium">
+                        ✓ verified ({v.identity_email})
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-400 font-mono">
                     {v.wallet_address ? truncate(v.wallet_address) : "no wallet bound"}
                   </p>

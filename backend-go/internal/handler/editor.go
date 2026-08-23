@@ -127,7 +127,7 @@ type reviewerFieldsRequest struct {
 
 func (h *EditorHandler) GetReviewerSpecialization(c *gin.Context) {
 	user := c.MustGet("user").(*domain.User)
-	if user.Role != "reviewer" {
+	if user.Role != "reviewer" && user.Role != "user" {
 		c.JSON(http.StatusForbidden, gin.H{"message": "reviewer role required"})
 		return
 	}
@@ -145,7 +145,7 @@ func (h *EditorHandler) GetReviewerSpecialization(c *gin.Context) {
 
 func (h *EditorHandler) SubmitReviewerFields(c *gin.Context) {
 	user := c.MustGet("user").(*domain.User)
-	if user.Role != "reviewer" {
+	if user.Role != "reviewer" && user.Role != "user" {
 		c.JSON(http.StatusForbidden, gin.H{"message": "reviewer role required"})
 		return
 	}

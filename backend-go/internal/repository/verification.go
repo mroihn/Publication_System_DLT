@@ -15,6 +15,8 @@ type FieldRequest struct {
 	Fields        []string  `json:"fields"`
 	Status        string    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
+	CurrentRole   string    `json:"current_role"`
+	IdentityEmail string    `json:"identity_email"`
 }
 
 type PendingManuscript struct {
@@ -70,10 +72,12 @@ func (r *PostgresEditorRepository) CreatePendingFieldRequest(userID string, fiel
 	return tx.Commit()
 }
 
+const fieldRequestSelectCols = `rfr.id, rfr.user_id, u.email, COALESCE(u.wallet_address, ''),
+		        rfr.fields, rfr.status, rfr.created_at, u.role, COALESCE(u.identity_email, '')`
+
 func (r *PostgresEditorRepository) ListPendingFieldRequests() ([]FieldRequest, error) {
 	rows, err := r.db.Query(
-		`SELECT rfr.id, rfr.user_id, u.email, COALESCE(u.wallet_address, ''),
-		        rfr.fields, rfr.status, rfr.created_at
+		`SELECT ` + fieldRequestSelectCols + `
 		 FROM reviewer_field_requests rfr
 		 JOIN users u ON u.id = rfr.user_id
 		 WHERE rfr.status = 'pending'
@@ -88,7 +92,7 @@ func (r *PostgresEditorRepository) ListPendingFieldRequests() ([]FieldRequest, e
 	for rows.Next() {
 		var fr FieldRequest
 		if err := rows.Scan(&fr.ID, &fr.UserID, &fr.Email, &fr.WalletAddress,
-			pq.Array(&fr.Fields), &fr.Status, &fr.CreatedAt); err != nil {
+			pq.Array(&fr.Fields), &fr.Status, &fr.CreatedAt, &fr.CurrentRole, &fr.IdentityEmail); err != nil {
 			return nil, err
 		}
 		out = append(out, fr)
@@ -102,13 +106,12 @@ func (r *PostgresEditorRepository) ListPendingFieldRequests() ([]FieldRequest, e
 func (r *PostgresEditorRepository) GetFieldRequest(id int64) (*FieldRequest, error) {
 	var fr FieldRequest
 	err := r.db.QueryRow(
-		`SELECT rfr.id, rfr.user_id, u.email, COALESCE(u.wallet_address, ''),
-		        rfr.fields, rfr.status, rfr.created_at
+		`SELECT `+fieldRequestSelectCols+`
 		 FROM reviewer_field_requests rfr
 		 JOIN users u ON u.id = rfr.user_id
 		 WHERE rfr.id = $1`, id,
 	).Scan(&fr.ID, &fr.UserID, &fr.Email, &fr.WalletAddress,
-		pq.Array(&fr.Fields), &fr.Status, &fr.CreatedAt)
+		pq.Array(&fr.Fields), &fr.Status, &fr.CreatedAt, &fr.CurrentRole, &fr.IdentityEmail)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -121,15 +124,14 @@ func (r *PostgresEditorRepository) GetFieldRequest(id int64) (*FieldRequest, err
 func (r *PostgresEditorRepository) GetLatestFieldRequestForUser(userID string) (*FieldRequest, error) {
 	var fr FieldRequest
 	err := r.db.QueryRow(
-		`SELECT rfr.id, rfr.user_id, u.email, COALESCE(u.wallet_address, ''),
-		        rfr.fields, rfr.status, rfr.created_at
+		`SELECT `+fieldRequestSelectCols+`
 		 FROM reviewer_field_requests rfr
 		 JOIN users u ON u.id = rfr.user_id
 		 WHERE rfr.user_id = $1
 		 ORDER BY rfr.created_at DESC
 		 LIMIT 1`, userID,
 	).Scan(&fr.ID, &fr.UserID, &fr.Email, &fr.WalletAddress,
-		pq.Array(&fr.Fields), &fr.Status, &fr.CreatedAt)
+		pq.Array(&fr.Fields), &fr.Status, &fr.CreatedAt, &fr.CurrentRole, &fr.IdentityEmail)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -155,7 +157,7 @@ func (r *PostgresEditorRepository) MarkFieldRequestApproved(id int64, editorID s
 		return err
 	}
 	if _, err := tx.Exec(
-		`UPDATE users SET verified_fields = $2, updated_at = NOW() WHERE id = $1`,
+		`UPDATE users SET verified_fields = $2, role = CASE WHEN role = 'user' THEN 'reviewer' ELSE role END, updated_at = NOW() WHERE id = $1`,
 		userID, pq.Array(fields),
 	); err != nil {
 		return err

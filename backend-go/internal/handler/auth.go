@@ -86,6 +86,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"role":           result.User.Role,
 			"specialities":   result.User.Specialities,
 			"verifiedFields": result.User.VerifiedFields,
+			"identityEmail":  result.User.IdentityEmail,
 		},
 	})
 }
@@ -110,5 +111,6 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		"role":           user.Role,
 		"specialities":   user.Specialities,
 		"verifiedFields": user.VerifiedFields,
+		"identityEmail":  user.IdentityEmail,
 	})
 }

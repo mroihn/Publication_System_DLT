@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/core/services/api.client';
 import { useToast } from '@/core/context/ToastContext';
+import { GoogleVerifyButton } from '@/components/GoogleVerifyButton';
 
 export default function ProfilePage() {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -108,6 +109,26 @@ export default function ProfilePage() {
             {isLinking ? 'Binding MetaMask...' : 'Connect & Bind MetaMask'}
           </button>
         )}
+
+        <div className="mt-8 pt-8 border-t border-gray-100">
+          <label className="text-sm font-medium text-gray-500 uppercase tracking-wider">Identity Verification</label>
+          <p className="text-sm text-gray-500 mt-1 mb-4">
+            Confirm you&apos;re a real person, not a throwaway account. Google is a temporary verification
+            option; ORCID / Scholar ID support is planned.
+          </p>
+          {user?.identityEmail ? (
+            <div className="p-4 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+              Verified as {user.identityEmail}
+            </div>
+          ) : (
+            <GoogleVerifyButton
+              onVerified={(email) => {
+                addToast(`Verified as ${email}!`, 'success');
+                setTimeout(() => window.location.reload(), 1500);
+              }}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

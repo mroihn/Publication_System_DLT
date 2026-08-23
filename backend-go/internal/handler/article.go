@@ -44,8 +44,27 @@ func atoiDefault(s string, def int) int {
 	return def
 }
 
-// List paginates manuscripts and enriches each with the resolved (unanonymized)
-// author identity for the public article hub.
+// finalDecisionStatuses are the manuscript statuses at which FR-08 permits
+// author/reviewer identity to be revealed (the review decision is final).
+// Anything earlier in the lifecycle (SUBMITTED, CHECKING, PENDING_EDITOR,
+// UNDER_REVIEW, REVISION_REQUESTED) must stay anonymized.
+var finalDecisionStatuses = map[string]bool{
+	"ACCEPTED":  true,
+	"REJECTED":  true,
+	"PUBLISHED": true,
+}
+
+// anonymizedIdentity is the placeholder returned for a participant of a
+// manuscript that has not yet reached a final decision: the on-chain
+// (burner) address only, with no real wallet or email attached.
+func anonymizedIdentity(address string) repository.Identity {
+	return repository.Identity{Address: address, RealWallet: address}
+}
+
+// List paginates manuscripts and enriches each with the author identity for
+// the public article hub. Identity is only resolved to the real wallet/email
+// once the manuscript has reached a final decision (FR-08); earlier statuses
+// get back the anonymized burner address.
 func (h *ArticleHandler) List(c *gin.Context) {
 	page := atoiDefault(c.Query("page"), 1)
 	limit := atoiDefault(c.Query("limit"), 12)
@@ -71,6 +90,10 @@ func (h *ArticleHandler) List(c *gin.Context) {
 	data := make([]gin.H, len(items))
 	for i, m := range items {
 		title, abstract := parseMetadata(m.Metadata)
+		author := anonymizedIdentity(m.AuthorAddress)
+		if finalDecisionStatuses[m.Status] {
+			author = h.identity.ResolveAuthor(m.AuthorAddress)
+		}
 		data[i] = gin.H{
 			"ms_id":            m.MsId,
 			"title":            title,
@@ -78,7 +101,7 @@ func (h *ArticleHandler) List(c *gin.Context) {
 			"status":           m.Status,
 			"version":          m.Version,
 			"cid":              m.CID,
-			"author":           h.identity.ResolveAuthor(m.AuthorAddress),
+			"author":           author,
 			"submit_timestamp": m.SubmitTimestamp,
 			"created_at":       m.CreatedAt,
 		}
@@ -86,7 +109,10 @@ func (h *ArticleHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total": total})
 }
 
-// OpenReview returns the per-version reviewer report with resolved identities.
+// OpenReview returns the per-version reviewer report. Author and reviewer
+// identities are only resolved to their real wallet/email once the manuscript
+// has reached a final decision (FR-08); earlier statuses get back anonymized
+// burner addresses.
 func (h *ArticleHandler) OpenReview(c *gin.Context) {
 	msId, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -103,7 +129,13 @@ func (h *ArticleHandler) OpenReview(c *gin.Context) {
 		return
 	}
 
-	resolve := func(addr string) repository.Identity { return h.identity.ResolveReviewer(addr) }
+	decided := finalDecisionStatuses[or.Status]
+	resolve := func(addr string) repository.Identity {
+		if !decided {
+			return anonymizedIdentity(addr)
+		}
+		return h.identity.ResolveReviewer(addr)
+	}
 
 	versions := make([]gin.H, len(or.Versions))
 	for i, v := range or.Versions {
@@ -129,10 +161,15 @@ func (h *ArticleHandler) OpenReview(c *gin.Context) {
 		reviewers[i] = resolve(addr)
 	}
 
+	author := anonymizedIdentity(or.AuthorAddress)
+	if decided {
+		author = h.identity.ResolveAuthor(or.AuthorAddress)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"ms_id":     or.MsId,
 		"status":    or.Status,
-		"author":    h.identity.ResolveAuthor(or.AuthorAddress),
+		"author":    author,
 		"versions":  versions,
 		"reviewers": reviewers,
 	})

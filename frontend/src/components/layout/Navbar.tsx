@@ -35,6 +35,7 @@ export default function Navbar() {
           { href: "/reviewer/earnings", label: "Earnings" },
         ]
       : []),
+    ...(user?.role === "user" ? [{ href: "/reviewer/specialization", label: "Become a Reviewer" }] : []),
     ...(user?.role === "editor" ? [{ href: "/editor", label: "Editor" }] : []),
     { href: "/profile", label: "Profile" },
   ];

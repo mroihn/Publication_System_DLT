@@ -47,7 +47,7 @@ func main() {
 	// Use cases
 	authUC := usecase.NewAuthUseCase(userRepo, cfg.JWTSecret)
 	manuscriptUC := usecase.NewManuscriptUseCase(pinata, ethereum, msReader)
-	userUC := usecase.NewUserUseCase(userRepo)
+	userUC := usecase.NewUserUseCase(userRepo, service.GoogleIdentityVerifier{}, cfg.GoogleClientID)
 
 	// HTTP handlers
 	authHandler := handler.NewAuthHandler(authUC, editorRepo)
@@ -134,6 +134,7 @@ func main() {
 		{
 			users.GET("/me", jwtMW, authHandler.Me)
 			users.PATCH("/wallet-bind", jwtMW, userHandler.BindWallet)
+			users.PATCH("/identity-verify", jwtMW, userHandler.VerifyIdentity)
 		}
 
 		manuscripts := v1.Group("/manuscripts")
@@ -154,11 +155,13 @@ func main() {
 		v1.POST("/internal/reviewer-sessions", sessionHandler.CreateReviewerSessions)
 
 		requireReviewer := middleware.RequireRole("reviewer")
+		requireReviewerOrUser := middleware.RequireRole("reviewer", "user")
 		// Reviewer fetches their burner session wallets to sign reviews.
 		v1.GET("/reviewer/assignments", jwtMW, requireReviewer, sessionHandler.GetAssignments)
-		// Reviewer views + (re)submits specialization fields for editor verification.
-		v1.GET("/reviewer/specialization", jwtMW, requireReviewer, editorHandler.GetReviewerSpecialization)
-		v1.POST("/reviewer/specialization", jwtMW, requireReviewer, editorHandler.SubmitReviewerFields)
+		// Reviewer views + (re)submits specialization fields for editor verification;
+		// a plain user may also apply here to become a reviewer.
+		v1.GET("/reviewer/specialization", jwtMW, requireReviewerOrUser, editorHandler.GetReviewerSpecialization)
+		v1.POST("/reviewer/specialization", jwtMW, requireReviewerOrUser, editorHandler.SubmitReviewerFields)
 
 		// Editor: reviewer specialization verification + manuscript screening.
 		editor := v1.Group("/editor", jwtMW, middleware.RequireRole("editor"))

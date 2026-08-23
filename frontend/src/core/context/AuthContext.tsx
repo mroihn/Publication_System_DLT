@@ -10,6 +10,7 @@ interface User {
   role?: string;
   specialities?: string[];
   verifiedFields?: string[];
+  identityEmail?: string;
 }
 
 interface AuthContextType {

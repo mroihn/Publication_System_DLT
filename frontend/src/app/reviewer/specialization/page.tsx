@@ -67,7 +67,7 @@ export default function ReviewerSpecializationPage() {
       router.push("/login");
       return;
     }
-    if (user?.role !== "reviewer") {
+    if (user?.role !== "reviewer" && user?.role !== "user") {
       router.push("/profile");
       return;
     }
@@ -125,11 +125,12 @@ export default function ReviewerSpecializationPage() {
       <div>
         <h1 className="text-3xl font-extrabold text-gray-900 flex items-center gap-3">
           <BadgeCheck className="w-8 h-8 text-indigo-600" />
-          My Specialization
+          {user?.role === "user" ? "Become a Reviewer" : "My Specialization"}
         </h1>
         <p className="text-gray-500 mt-2">
-          Declare the subject fields you can review. An editor verifies them before you can be
-          assigned to manuscripts of that field.
+          {user?.role === "user"
+            ? "Apply to review manuscripts by declaring your subject fields. An editor verifies your fields and account before you're upgraded to a reviewer."
+            : "Declare the subject fields you can review. An editor verifies them before you can be assigned to manuscripts of that field."}
         </p>
       </div>
 
@@ -252,7 +253,7 @@ export default function ReviewerSpecializationPage() {
             ) : (
               <BadgeCheck className="w-4 h-4" />
             )}
-            Submit for verification
+            {user?.role === "user" ? "Apply to become a reviewer" : "Submit for verification"}
           </button>
         </div>
       </div>
