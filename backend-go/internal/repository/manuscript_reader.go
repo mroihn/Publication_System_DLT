@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
-	"database/sql"
-	"errors"
+	"sort"
+	"sync"
 	"time"
+
+	"github.com/mroihn/ta-proj/backend-go/internal/chainquery"
 )
 
 type ManuscriptReader interface {
@@ -96,343 +98,440 @@ type ProcessedEvent struct {
 
 type ManuscriptDetail struct {
 	ManuscriptSummary
-	Metadata        string               `json:"metadata"`
-	Field           *string              `json:"field"`
-	DOI             *string              `json:"doi"`
-	DOITokenID      *int64               `json:"doi_token_id"`
-	AcceptCount     int                  `json:"accept_count"`
-	RejectCount     int                  `json:"reject_count"`
-	ReviseCount     int                  `json:"revise_count"`
-	Reviewers       []ManuscriptReviewer `json:"reviewers"`
-	Reviews         []ManuscriptReview   `json:"reviews"`
-	Revisions       []ManuscriptRevision `json:"revisions"`
-	PlagiarismReqs  []PlagiarismRequest  `json:"plagiarism_requests"`
-	Events          []ProcessedEvent     `json:"events"`
+	Metadata       string               `json:"metadata"`
+	Field          *string              `json:"field"`
+	DOI            *string              `json:"doi"`
+	DOITokenID     *int64               `json:"doi_token_id"`
+	AcceptCount    int                  `json:"accept_count"`
+	RejectCount    int                  `json:"reject_count"`
+	ReviseCount    int                  `json:"revise_count"`
+	Reviewers      []ManuscriptReviewer `json:"reviewers"`
+	Reviews        []ManuscriptReview   `json:"reviews"`
+	Revisions      []ManuscriptRevision `json:"revisions"`
+	PlagiarismReqs []PlagiarismRequest  `json:"plagiarism_requests"`
+	Events         []ProcessedEvent     `json:"events"`
 }
 
-type PostgresManuscriptReader struct {
-	db *sql.DB
+// ChainManuscriptReader implements ManuscriptReader by reading directly from
+// the deployed contracts on every call — there is no off-chain cache. List
+// endpoints therefore cost one RPC call per manuscript (parallelized); this
+// is an accepted, disclosed trade-off, not an oversight.
+type ChainManuscriptReader struct {
+	registry *chainquery.RegistryReader
+	oracle   *chainquery.OracleReader
 }
 
-func NewPostgresManuscriptReader(db *sql.DB) *PostgresManuscriptReader {
-	return &PostgresManuscriptReader{db: db}
+func NewChainManuscriptReader(registry *chainquery.RegistryReader, oracle *chainquery.OracleReader) *ChainManuscriptReader {
+	return &ChainManuscriptReader{registry: registry, oracle: oracle}
 }
 
-func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]ManuscriptSummary, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
-		       COALESCE(author_address,''), plagiarism_score,
-		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
-		       submit_timestamp, created_at, updated_at
-		FROM manuscripts ORDER BY ms_id DESC
-	`)
+// maxParallelReads bounds concurrent eth_call requests when enumerating all
+// manuscripts, so a large manuscript count doesn't open hundreds of
+// simultaneous RPC connections.
+const maxParallelReads = 12
+
+func summaryFromManuscript(m *chainquery.Manuscript) ManuscriptSummary {
+	score := int(m.PlagiarismScore)
+	return ManuscriptSummary{
+		MsId:            m.ID,
+		CID:             m.CID,
+		Metadata:        m.Metadata,
+		Status:          chainquery.StatusNames[m.Status],
+		Version:         int(m.Version),
+		AuthorAddress:   m.Author.Hex(),
+		PlagiarismScore: &score,
+		// SubmitTxHash/SubmitBlock/SubmitTimestamp/CreatedAt/UpdatedAt have no
+		// contract-view equivalent (only in the ManuscriptSubmitted event log)
+		// and aren't worth an extra log query for every row of a list — left
+		// blank here; GetManuscriptByID (single resource) fills them in.
+	}
+}
+
+// fetchAllSummaries enumerates every manuscript ID and reads each one in
+// parallel. Called once per ListManuscriptsPaged/CountManuscripts/
+// ListManuscripts invocation — no caching, per the "always read live" design.
+func (r *ChainManuscriptReader) fetchAllSummaries(ctx context.Context) ([]ManuscriptSummary, error) {
+	next, err := r.registry.NextManuscriptID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var result []ManuscriptSummary
-	for rows.Next() {
-		var ms ManuscriptSummary
-		if err := rows.Scan(
-			&ms.MsId, &ms.CID, &ms.Metadata, &ms.Status, &ms.Version,
-			&ms.AuthorAddress, &ms.PlagiarismScore,
-			&ms.SubmitTxHash, &ms.SubmitBlock,
-			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		result = append(result, ms)
+	results := make([]ManuscriptSummary, next)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxParallelReads)
+	errCh := make(chan error, 1)
+
+	for id := uint64(0); id < next; id++ {
+		wg.Add(1)
+		go func(id uint64) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			m, err := r.registry.GetManuscript(ctx, id)
+			if err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+			results[id] = summaryFromManuscript(m)
+		}(id)
 	}
-	if result == nil {
-		result = []ManuscriptSummary{}
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
 	}
-	return result, rows.Err()
+
+	sort.Slice(results, func(i, j int) bool { return results[i].MsId > results[j].MsId })
+	return results, nil
 }
 
-func (r *PostgresManuscriptReader) ListManuscriptsPaged(ctx context.Context, limit, offset int, status string) ([]ManuscriptSummary, error) {
-	query := `
-		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
-		       COALESCE(author_address,''), plagiarism_score,
-		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
-		       submit_timestamp, created_at, updated_at
-		FROM manuscripts`
-	args := []any{limit, offset}
+func (r *ChainManuscriptReader) ListManuscripts(ctx context.Context) ([]ManuscriptSummary, error) {
+	return r.fetchAllSummaries(ctx)
+}
+
+func (r *ChainManuscriptReader) ListManuscriptsPaged(ctx context.Context, limit, offset int, status string) ([]ManuscriptSummary, error) {
+	all, err := r.fetchAllSummaries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered := all
 	if status != "" {
-		query += ` WHERE status = $3`
-		args = append(args, status)
-	}
-	query += ` ORDER BY ms_id DESC LIMIT $1 OFFSET $2`
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var result []ManuscriptSummary
-	for rows.Next() {
-		var ms ManuscriptSummary
-		if err := rows.Scan(
-			&ms.MsId, &ms.CID, &ms.Metadata, &ms.Status, &ms.Version,
-			&ms.AuthorAddress, &ms.PlagiarismScore,
-			&ms.SubmitTxHash, &ms.SubmitBlock,
-			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		result = append(result, ms)
-	}
-	if result == nil {
-		result = []ManuscriptSummary{}
-	}
-	return result, rows.Err()
-}
-
-func (r *PostgresManuscriptReader) CountManuscripts(ctx context.Context, status string) (int, error) {
-	query := `SELECT count(*) FROM manuscripts`
-	args := []any{}
-	if status != "" {
-		query += ` WHERE status = $1`
-		args = append(args, status)
-	}
-	var n int
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(&n)
-	return n, err
-}
-
-// GetOpenReview builds the per-version reviewer reports from the indexed
-// (version-tagged) manuscript_reviewers and reviews rows.
-func (r *PostgresManuscriptReader) GetOpenReview(ctx context.Context, msId uint64) (*OpenReview, error) {
-	var maxVersion int
-	var status, authorAddr string
-	var submitTs *time.Time
-	var createdAt time.Time
-	err := r.db.QueryRowContext(ctx,
-		`SELECT version, COALESCE(status,''), COALESCE(author_address,''), submit_timestamp, created_at FROM manuscripts WHERE ms_id = $1`, msId,
-	).Scan(&maxVersion, &status, &authorAddr, &submitTs, &createdAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	revDates := map[int]*time.Time{}
-	rrows, err := r.db.QueryContext(ctx,
-		`SELECT version, revised_at FROM manuscript_revisions WHERE ms_id = $1`, msId)
-	if err != nil {
-		return nil, err
-	}
-	for rrows.Next() {
-		var v int
-		var t time.Time
-		if err := rrows.Scan(&v, &t); err != nil {
-			rrows.Close()
-			return nil, err
-		}
-		tt := t
-		revDates[v] = &tt
-	}
-	rrows.Close()
-
-	out := &OpenReview{MsId: msId, Status: status, AuthorAddress: authorAddr, Versions: []OpenReviewVersion{}}
-	seenReviewer := map[string]bool{}
-
-	for v := 1; v <= maxVersion; v++ {
-		ver := OpenReviewVersion{Version: v, Reviewers: []string{}, Reviews: []OpenReviewEntry{}}
-		if v == 1 {
-			if submitTs != nil {
-				ver.Date = submitTs
-			} else {
-				d := createdAt
-				ver.Date = &d
-			}
-		} else {
-			ver.Date = revDates[v]
-		}
-
-		vr, err := r.db.QueryContext(ctx,
-			`SELECT reviewer_address FROM manuscript_reviewers WHERE ms_id = $1 AND version = $2 ORDER BY reviewer_address`, msId, v)
-		if err != nil {
-			return nil, err
-		}
-		for vr.Next() {
-			var addr string
-			if err := vr.Scan(&addr); err != nil {
-				vr.Close()
-				return nil, err
-			}
-			ver.Reviewers = append(ver.Reviewers, addr)
-			if !seenReviewer[addr] {
-				seenReviewer[addr] = true
-				out.Reviewers = append(out.Reviewers, addr)
+		filtered = make([]ManuscriptSummary, 0, len(all))
+		for _, m := range all {
+			if m.Status == status {
+				filtered = append(filtered, m)
 			}
 		}
-		vr.Close()
-
-		er, err := r.db.QueryContext(ctx,
-			`SELECT reviewer_address, verdict, review_cid, COALESCE(tx_hash,'')
-			 FROM reviews WHERE ms_id = $1 AND version = $2`, msId, v)
-		if err != nil {
-			return nil, err
-		}
-		for er.Next() {
-			var e OpenReviewEntry
-			if err := er.Scan(&e.ReviewerAddress, &e.Verdict, &e.ReviewCid, &e.TxHash); err != nil {
-				er.Close()
-				return nil, err
-			}
-			ver.Reviews = append(ver.Reviews, e)
-		}
-		er.Close()
-
-		out.Versions = append(out.Versions, ver)
+	}
+	if offset >= len(filtered) {
+		return []ManuscriptSummary{}, nil
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	out := filtered[offset:end]
+	if out == nil {
+		out = []ManuscriptSummary{}
 	}
 	return out, nil
 }
 
-func (r *PostgresManuscriptReader) GetManuscriptByID(ctx context.Context, msId uint64) (*ManuscriptDetail, error) {
-	var d ManuscriptDetail
+func (r *ChainManuscriptReader) CountManuscripts(ctx context.Context, status string) (int, error) {
+	all, err := r.fetchAllSummaries(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if status == "" {
+		return len(all), nil
+	}
+	n := 0
+	for _, m := range all {
+		if m.Status == status {
+			n++
+		}
+	}
+	return n, nil
+}
 
-	err := r.db.QueryRowContext(ctx, `
-		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
-		       COALESCE(author_address,''), plagiarism_score, field, doi, doi_token_id,
-		       accept_count, reject_count, revise_count,
-		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
-		       submit_timestamp, created_at, updated_at
-		FROM manuscripts WHERE ms_id = $1
-	`, msId).Scan(
-		&d.MsId, &d.CID, &d.Metadata, &d.Status, &d.Version,
-		&d.AuthorAddress, &d.PlagiarismScore, &d.Field, &d.DOI, &d.DOITokenID,
-		&d.AcceptCount, &d.RejectCount, &d.ReviseCount,
-		&d.SubmitTxHash, &d.SubmitBlock,
-		&d.SubmitTimestamp, &d.CreatedAt, &d.UpdatedAt,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
+// blockTimeCache memoizes header lookups within a single request — many logs
+// for one manuscript often share a block (or a small number of blocks), and
+// this avoids repeat HeaderByNumber calls without persisting anything.
+type blockTimeCache struct {
+	ctx    context.Context
+	client chainquery.BlockchainClient
+	cache  map[uint64]time.Time
+}
+
+func newBlockTimeCache(ctx context.Context, client chainquery.BlockchainClient) *blockTimeCache {
+	return &blockTimeCache{ctx: ctx, client: client, cache: map[uint64]time.Time{}}
+}
+
+func (c *blockTimeCache) get(blockNumber uint64) time.Time {
+	if t, ok := c.cache[blockNumber]; ok {
+		return t
+	}
+	t, err := chainquery.BlockTime(c.ctx, c.client, blockNumber)
+	if err != nil {
+		return time.Time{}
+	}
+	c.cache[blockNumber] = t
+	return t
+}
+
+func (r *ChainManuscriptReader) GetManuscriptByID(ctx context.Context, msId uint64) (*ManuscriptDetail, error) {
+	next, err := r.registry.NextManuscriptID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if msId >= next {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
 
-	// Reviewers
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT reviewer_address, assigned_at
-		FROM manuscript_reviewers WHERE ms_id = $1 ORDER BY assigned_at
-	`, msId)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var rv ManuscriptReviewer
-		if err := rows.Scan(&rv.ReviewerAddress, &rv.AssignedAt); err != nil {
-			return nil, err
+	var (
+		ms       *chainquery.Manuscript
+		logs     []chainquery.DecodedLog
+		plagLogs []chainquery.DecodedLog
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	setErr := func(e error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = e
 		}
-		d.Reviewers = append(d.Reviewers, rv)
-	}
-	if d.Reviewers == nil {
-		d.Reviewers = []ManuscriptReviewer{}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		mu.Unlock()
 	}
 
-	// Reviews
-	rrows, err := r.db.QueryContext(ctx, `
-		SELECT reviewer_address, verdict, review_cid,
-		       COALESCE(tx_hash,''), COALESCE(block_number,0), submitted_at
-		FROM reviews WHERE ms_id = $1 ORDER BY block_number
-	`, msId)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		m, err := r.registry.GetManuscript(ctx, msId)
+		if err != nil {
+			setErr(err)
+			return
+		}
+		ms = m
+	}()
+	go func() {
+		defer wg.Done()
+		l, err := r.registry.LogsForManuscript(ctx, msId,
+			"ManuscriptSubmitted", "ReviewersAssigned", "ReviewSubmitted",
+			"ManuscriptRevised", "DOIMinted")
+		if err != nil {
+			setErr(err)
+			return
+		}
+		logs = l
+	}()
+	go func() {
+		defer wg.Done()
+		l, err := r.oracle.PlagiarismLogsForManuscript(ctx, msId)
+		if err != nil {
+			setErr(err)
+			return
+		}
+		plagLogs = l
+	}()
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	btc := newBlockTimeCache(ctx, r.registry.Client())
+
+	d := &ManuscriptDetail{
+		ManuscriptSummary: summaryFromManuscript(ms),
+		Reviewers:          []ManuscriptReviewer{},
+		Reviews:            []ManuscriptReview{},
+		Revisions:          []ManuscriptRevision{},
+		PlagiarismReqs:     []PlagiarismRequest{},
+		Events:             []ProcessedEvent{},
+	}
+	if ms.Field != "" {
+		f := ms.Field
+		d.Field = &f
+	}
+	if ms.DOI != "" {
+		doi := ms.DOI
+		d.DOI = &doi
+	}
+	d.AcceptCount = int(ms.AcceptCount)
+	d.RejectCount = int(ms.RejectCount)
+	d.ReviseCount = int(ms.ReviseCount)
+
+	sort.Slice(logs, func(i, j int) bool {
+		if logs[i].Raw.BlockNumber != logs[j].Raw.BlockNumber {
+			return logs[i].Raw.BlockNumber < logs[j].Raw.BlockNumber
+		}
+		return logs[i].Raw.Index < logs[j].Raw.Index
+	})
+
+	for _, l := range logs {
+		t := btc.get(l.Raw.BlockNumber)
+		switch l.Name {
+		case "ManuscriptSubmitted":
+			d.SubmitTxHash = l.Raw.TxHash.Hex()
+			d.SubmitBlock = int64(l.Raw.BlockNumber)
+			tt := t
+			d.SubmitTimestamp = &tt
+			d.CreatedAt = t
+			d.UpdatedAt = t
+		case "ReviewersAssigned":
+			for _, addr := range chainquery.AddressSliceArg(l.Args, "reviewers") {
+				d.Reviewers = append(d.Reviewers, ManuscriptReviewer{ReviewerAddress: addr.Hex(), AssignedAt: t})
+			}
+		case "ReviewSubmitted":
+			cid := chainquery.StringArg(l.Args, "reviewCid")
+			d.Reviews = append(d.Reviews, ManuscriptReview{
+				ReviewerAddress: chainquery.AddressArg(l.Args, "reviewer").Hex(),
+				Verdict:         chainquery.VerdictNames[chainquery.Uint8Arg(l.Args, "verdict")],
+				ReviewCid:       &cid,
+				TxHash:          l.Raw.TxHash.Hex(),
+				BlockNumber:     int64(l.Raw.BlockNumber),
+				SubmittedAt:     t,
+			})
+		case "ManuscriptRevised":
+			d.Revisions = append(d.Revisions, ManuscriptRevision{
+				NewCID:      chainquery.StringArg(l.Args, "newCid"),
+				Version:     int(chainquery.BigIntArg(l.Args, "version").Uint64()),
+				TxHash:      l.Raw.TxHash.Hex(),
+				BlockNumber: int64(l.Raw.BlockNumber),
+				RevisedAt:   t,
+			})
+		case "DOIMinted":
+			id := chainquery.BigIntArg(l.Args, "doiTokenId").Int64()
+			d.DOITokenID = &id
+		}
+		d.Events = append(d.Events, ProcessedEvent{
+			EventName:    l.Name,
+			TxHash:       l.Raw.TxHash.Hex(),
+			BlockNumber:  l.Raw.BlockNumber,
+			LogIndex:     l.Raw.Index,
+			ContractAddr: l.Raw.Address.Hex(),
+			ProcessedAt:  t,
+		})
+	}
+
+	// Pair PlagiarismCheckRequested/Fulfilled by requestId.
+	reqs := map[uint64]*PlagiarismRequest{}
+	var reqOrder []uint64
+	for _, l := range plagLogs {
+		reqID := chainquery.BigIntArg(l.Args, "requestId").Uint64()
+		pr, ok := reqs[reqID]
+		if !ok {
+			pr = &PlagiarismRequest{RequestID: reqID}
+			reqs[reqID] = pr
+			reqOrder = append(reqOrder, reqID)
+		}
+		t := btc.get(l.Raw.BlockNumber)
+		switch l.Name {
+		case "PlagiarismCheckRequested":
+			pr.RequestedAt = t
+		case "PlagiarismCheckFulfilled":
+			pr.Fulfilled = true
+			score := int(chainquery.BigIntArg(l.Args, "score").Uint64())
+			pr.Score = &score
+			ft := t
+			pr.FulfilledAt = &ft
+		}
+	}
+	sort.Slice(reqOrder, func(i, j int) bool { return reqOrder[i] < reqOrder[j] })
+	for _, id := range reqOrder {
+		d.PlagiarismReqs = append(d.PlagiarismReqs, *reqs[id])
+	}
+
+	return d, nil
+}
+
+func (r *ChainManuscriptReader) GetOpenReview(ctx context.Context, msId uint64) (*OpenReview, error) {
+	next, err := r.registry.NextManuscriptID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rrows.Close()
-	for rrows.Next() {
-		var rv ManuscriptReview
-		if err := rrows.Scan(&rv.ReviewerAddress, &rv.Verdict, &rv.ReviewCid, &rv.TxHash, &rv.BlockNumber, &rv.SubmittedAt); err != nil {
-			return nil, err
-		}
-		d.Reviews = append(d.Reviews, rv)
-	}
-	if d.Reviews == nil {
-		d.Reviews = []ManuscriptReview{}
-	}
-	if err := rrows.Err(); err != nil {
-		return nil, err
+	if msId >= next {
+		return nil, nil
 	}
 
-	// Revisions
-	vrows, err := r.db.QueryContext(ctx, `
-		SELECT new_cid, version,
-		       COALESCE(tx_hash,''), COALESCE(block_number,0), revised_at
-		FROM manuscript_revisions WHERE ms_id = $1 ORDER BY version
-	`, msId)
+	ms, err := r.registry.GetManuscript(ctx, msId)
 	if err != nil {
 		return nil, err
 	}
-	defer vrows.Close()
-	for vrows.Next() {
-		var rev ManuscriptRevision
-		if err := vrows.Scan(&rev.NewCID, &rev.Version, &rev.TxHash, &rev.BlockNumber, &rev.RevisedAt); err != nil {
-			return nil, err
-		}
-		d.Revisions = append(d.Revisions, rev)
-	}
-	if d.Revisions == nil {
-		d.Revisions = []ManuscriptRevision{}
-	}
-	if err := vrows.Err(); err != nil {
-		return nil, err
-	}
 
-	// Plagiarism requests
-	prows, err := r.db.QueryContext(ctx, `
-		SELECT request_id, score, fulfilled, requested_at, fulfilled_at
-		FROM plagiarism_requests WHERE ms_id = $1 ORDER BY request_id
-	`, msId)
+	logs, err := r.registry.LogsForManuscript(ctx, msId,
+		"ManuscriptSubmitted", "ManuscriptRevised", "ReviewersAssigned", "ReviewSubmitted")
 	if err != nil {
 		return nil, err
 	}
-	defer prows.Close()
-	for prows.Next() {
-		var pr PlagiarismRequest
-		if err := prows.Scan(&pr.RequestID, &pr.Score, &pr.Fulfilled, &pr.RequestedAt, &pr.FulfilledAt); err != nil {
-			return nil, err
+	sort.Slice(logs, func(i, j int) bool {
+		if logs[i].Raw.BlockNumber != logs[j].Raw.BlockNumber {
+			return logs[i].Raw.BlockNumber < logs[j].Raw.BlockNumber
 		}
-		d.PlagiarismReqs = append(d.PlagiarismReqs, pr)
+		return logs[i].Raw.Index < logs[j].Raw.Index
+	})
+
+	btc := newBlockTimeCache(ctx, r.registry.Client())
+
+	type revisionMark struct {
+		block   uint64
+		version int
 	}
-	if d.PlagiarismReqs == nil {
-		d.PlagiarismReqs = []PlagiarismRequest{}
-	}
-	if err := prows.Err(); err != nil {
-		return nil, err
+	var revisions []revisionMark
+	dateOf := map[int]*time.Time{}
+
+	for _, l := range logs {
+		switch l.Name {
+		case "ManuscriptSubmitted":
+			t := btc.get(l.Raw.BlockNumber)
+			dateOf[1] = &t
+		case "ManuscriptRevised":
+			v := int(chainquery.BigIntArg(l.Args, "version").Uint64())
+			revisions = append(revisions, revisionMark{block: l.Raw.BlockNumber, version: v})
+			t := btc.get(l.Raw.BlockNumber)
+			dateOf[v] = &t
+		}
 	}
 
-	// Processed events (on-chain audit log, linked via ms_id)
-	erows, err := r.db.QueryContext(ctx, `
-		SELECT event_name, COALESCE(tx_hash,''), block_number, log_index, contract_addr, processed_at
-		FROM processed_events
-		WHERE ms_id = $1
-		ORDER BY block_number, log_index
-	`, msId)
-	if err != nil {
-		return nil, err
-	}
-	defer erows.Close()
-	for erows.Next() {
-		var pe ProcessedEvent
-		if err := erows.Scan(&pe.EventName, &pe.TxHash, &pe.BlockNumber, &pe.LogIndex, &pe.ContractAddr, &pe.ProcessedAt); err != nil {
-			return nil, err
+	// version = 1 + count(revisions with revision.block <= log.block) — same
+	// bucketing formula the old off-chain projection used (migration
+	// 010_review_versions_and_comments.up.sql), computed here from logs
+	// instead of from a mirrored table.
+	versionOf := func(blockNumber uint64) int {
+		v := 1
+		for _, rv := range revisions {
+			if rv.block <= blockNumber {
+				v++
+			}
 		}
-		d.Events = append(d.Events, pe)
-	}
-	if d.Events == nil {
-		d.Events = []ProcessedEvent{}
-	}
-	if err := erows.Err(); err != nil {
-		return nil, err
+		return v
 	}
 
-	return &d, nil
+	maxVersion := 1 + len(revisions)
+	versions := make([]OpenReviewVersion, maxVersion)
+	for i := 0; i < maxVersion; i++ {
+		versions[i] = OpenReviewVersion{Version: i + 1, Date: dateOf[i+1], Reviewers: []string{}, Reviews: []OpenReviewEntry{}}
+	}
+
+	seen := map[string]bool{}
+	var allReviewers []string
+
+	for _, l := range logs {
+		switch l.Name {
+		case "ReviewersAssigned":
+			v := versionOf(l.Raw.BlockNumber)
+			for _, addr := range chainquery.AddressSliceArg(l.Args, "reviewers") {
+				a := addr.Hex()
+				versions[v-1].Reviewers = append(versions[v-1].Reviewers, a)
+				if !seen[a] {
+					seen[a] = true
+					allReviewers = append(allReviewers, a)
+				}
+			}
+		case "ReviewSubmitted":
+			v := versionOf(l.Raw.BlockNumber)
+			cid := chainquery.StringArg(l.Args, "reviewCid")
+			versions[v-1].Reviews = append(versions[v-1].Reviews, OpenReviewEntry{
+				ReviewerAddress: chainquery.AddressArg(l.Args, "reviewer").Hex(),
+				Verdict:         chainquery.VerdictNames[chainquery.Uint8Arg(l.Args, "verdict")],
+				ReviewCid:       &cid,
+				TxHash:          l.Raw.TxHash.Hex(),
+			})
+		}
+	}
+	for i := range versions {
+		sort.Strings(versions[i].Reviewers)
+	}
+
+	return &OpenReview{
+		MsId:          msId,
+		Status:        chainquery.StatusNames[ms.Status],
+		AuthorAddress: ms.Author.Hex(),
+		Versions:      versions,
+		Reviewers:     allReviewers,
+	}, nil
 }

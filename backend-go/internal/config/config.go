@@ -24,9 +24,10 @@ type Config struct {
 
 	ReviewOracleContractAddress string
 	DOITokenContractAddress     string
-	IndexerStartBlock           uint64
-	IndexerPollIntervalMs       int
-	IndexerRPCWSS               string
+	// RegistryDeployBlock bounds eth_getLogs queries (all three contracts were
+	// deployed together, so one shared block covers them). Without this,
+	// every on-demand log query would windowed-scan from genesis.
+	RegistryDeployBlock uint64
 }
 
 func Load() *Config {
@@ -49,9 +50,7 @@ func Load() *Config {
 
 		ReviewOracleContractAddress: getEnv("REVIEW_ORACLE_CONTRACT_ADDRESS", "0x0000000000000000000000000000000000000000"),
 		DOITokenContractAddress:     getEnv("DOI_TOKEN_CONTRACT_ADDRESS", "0x0000000000000000000000000000000000000000"),
-		IndexerStartBlock:           parseUint64(getEnv("INDEXER_START_BLOCK", "0")),
-		IndexerPollIntervalMs:       parseInt(getEnv("INDEXER_POLL_INTERVAL_MS", "5000")),
-		IndexerRPCWSS:               getEnv("INDEXER_RPC_WSS", ""),
+		RegistryDeployBlock:         parseUint64(getEnv("REGISTRY_DEPLOY_BLOCK", "0")),
 	}
 }
 
@@ -64,10 +63,5 @@ func getEnv(key, def string) string {
 
 func parseUint64(s string) uint64 {
 	v, _ := strconv.ParseUint(s, 10, 64)
-	return v
-}
-
-func parseInt(s string) int {
-	v, _ := strconv.Atoi(s)
 	return v
 }

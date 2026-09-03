@@ -1,10 +1,13 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
+	"sort"
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/mroihn/ta-proj/backend-go/internal/chainquery"
 )
 
 type FieldRequest struct {
@@ -40,11 +43,12 @@ type EditorRepository interface {
 }
 
 type PostgresEditorRepository struct {
-	db *sql.DB
+	db       *sql.DB
+	registry *chainquery.RegistryReader
 }
 
-func NewPostgresEditorRepository(db *sql.DB) *PostgresEditorRepository {
-	return &PostgresEditorRepository{db: db}
+func NewPostgresEditorRepository(db *sql.DB, registry *chainquery.RegistryReader) *PostgresEditorRepository {
+	return &PostgresEditorRepository{db: db, registry: registry}
 }
 
 func (r *PostgresEditorRepository) CreatePendingFieldRequest(userID string, fields []string) error {
@@ -174,27 +178,40 @@ func (r *PostgresEditorRepository) RejectFieldRequest(id int64, editorID string)
 	return err
 }
 
+// ListManuscriptsByStatus enumerates every manuscript ID and reads each one
+// directly from the contract, filtering by status in memory — the contract
+// has no "list by status" query. Acceptable at today's manuscript count;
+// does not scale indefinitely (see Bab V Keterbatasan).
 func (r *PostgresEditorRepository) ListManuscriptsByStatus(status string) ([]PendingManuscript, error) {
-	rows, err := r.db.Query(
-		`SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''),
-		        field, COALESCE(author_address,''), created_at
-		 FROM manuscripts WHERE status = $1 ORDER BY ms_id DESC`, status,
-	)
+	ctx := context.Background()
+	next, err := r.registry.NextManuscriptID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var out []PendingManuscript
-	for rows.Next() {
-		var m PendingManuscript
-		if err := rows.Scan(&m.MsID, &m.CID, &m.Metadata, &m.Status, &m.Field, &m.AuthorAddress, &m.CreatedAt); err != nil {
+	out := []PendingManuscript{}
+	for id := uint64(0); id < next; id++ {
+		m, err := r.registry.GetManuscript(ctx, id)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, m)
+		if chainquery.StatusNames[m.Status] != status {
+			continue
+		}
+		var field *string
+		if m.Field != "" {
+			f := m.Field
+			field = &f
+		}
+		out = append(out, PendingManuscript{
+			MsID:          m.ID,
+			CID:           m.CID,
+			Metadata:      m.Metadata,
+			Status:        chainquery.StatusNames[m.Status],
+			Field:         field,
+			AuthorAddress: m.Author.Hex(),
+		})
 	}
-	if out == nil {
-		out = []PendingManuscript{}
-	}
-	return out, rows.Err()
+	sort.Slice(out, func(i, j int) bool { return out[i].MsID > out[j].MsID })
+	return out, nil
 }

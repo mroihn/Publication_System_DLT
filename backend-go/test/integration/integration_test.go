@@ -18,7 +18,6 @@
 package integration
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -28,7 +27,6 @@ import (
 	"github.com/mroihn/ta-proj/backend-go/internal/config"
 	"github.com/mroihn/ta-proj/backend-go/internal/db"
 	"github.com/mroihn/ta-proj/backend-go/internal/domain"
-	idxrepo "github.com/mroihn/ta-proj/backend-go/internal/indexer/repository"
 	"github.com/mroihn/ta-proj/backend-go/internal/repository"
 )
 
@@ -107,18 +105,10 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 
 	expected := []string{
 		"users",
-		"manuscripts",
-		"manuscript_reviewers",
-		"manuscript_revisions",
-		"reviews",
-		"plagiarism_requests",
-		"incentive_payments",
-		"doi_comments",
-		"processed_events",
-		"indexer_checkpoints",
 		"submission_wallets",
 		"reviewer_sessions",
 		"reviewer_field_requests",
+		"comment_contents",
 	}
 
 	for _, table := range expected {
@@ -241,138 +231,3 @@ func TestUserRepositoryWalletBinding(t *testing.T) {
 	}
 }
 
-// TestIndexerMarkProcessedIsIdempotent verifies the indexer's exactly-once
-// guarantee: replaying the same (tx_hash, log_index) pair must be reported as
-// already processed instead of inserting a duplicate row.
-func TestIndexerMarkProcessedIsIdempotent(t *testing.T) {
-	testDB, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := idxrepo.NewPostgresIndexerRepository(testDB)
-	ctx := context.Background()
-
-	const (
-		txHash   = "0xabc0000000000000000000000000000000000000000000000000000000000001"
-		logIndex = uint(3)
-		block    = uint64(1234)
-		event    = "ManuscriptSubmitted"
-		contract = "0x0000000000000000000000000000000000000009"
-	)
-	msId := uint64(42)
-
-	// First observation → not previously processed.
-	tx1, err := testDB.Begin()
-	if err != nil {
-		t.Fatalf("begin tx1: %v", err)
-	}
-	already, err := repo.MarkProcessed(ctx, tx1, txHash, logIndex, block, event, contract, &msId)
-	if err != nil {
-		t.Fatalf("MarkProcessed (first): %v", err)
-	}
-	if already {
-		t.Error("first MarkProcessed reported the event as already processed")
-	}
-	if err := tx1.Commit(); err != nil {
-		t.Fatalf("commit tx1: %v", err)
-	}
-
-	// Replay of the very same log → must be reported as already processed.
-	tx2, err := testDB.Begin()
-	if err != nil {
-		t.Fatalf("begin tx2: %v", err)
-	}
-	already, err = repo.MarkProcessed(ctx, tx2, txHash, logIndex, block, event, contract, &msId)
-	if err != nil {
-		t.Fatalf("MarkProcessed (replay): %v", err)
-	}
-	if !already {
-		t.Error("replayed MarkProcessed did not report the event as already processed")
-	}
-	if err := tx2.Commit(); err != nil {
-		t.Fatalf("commit tx2: %v", err)
-	}
-
-	// Exactly one row must exist for this log.
-	var count int
-	if err := testDB.QueryRow(
-		`SELECT COUNT(*) FROM processed_events WHERE tx_hash = $1 AND log_index = $2`,
-		txHash, logIndex,
-	).Scan(&count); err != nil {
-		t.Fatalf("count processed_events: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("processed_events row count = %d, want exactly 1", count)
-	}
-
-	// A different log index in the same transaction is a distinct event.
-	tx3, err := testDB.Begin()
-	if err != nil {
-		t.Fatalf("begin tx3: %v", err)
-	}
-	already, err = repo.MarkProcessed(ctx, tx3, txHash, logIndex+1, block, event, contract, &msId)
-	if err != nil {
-		t.Fatalf("MarkProcessed (different log index): %v", err)
-	}
-	if already {
-		t.Error("a different log_index was incorrectly treated as already processed")
-	}
-	if err := tx3.Commit(); err != nil {
-		t.Fatalf("commit tx3: %v", err)
-	}
-}
-
-// TestIndexerCheckpointNeverGoesBackwards verifies the checkpoint upsert keeps
-// the highest observed block, so an out-of-order or replayed sync cannot rewind
-// the indexer's progress.
-func TestIndexerCheckpointNeverGoesBackwards(t *testing.T) {
-	testDB, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := idxrepo.NewPostgresIndexerRepository(testDB)
-	ctx := context.Background()
-	const key = "registry"
-
-	saveBlock := func(block uint64) {
-		t.Helper()
-		tx, err := testDB.Begin()
-		if err != nil {
-			t.Fatalf("begin: %v", err)
-		}
-		if err := repo.SaveLastBlock(ctx, tx, key, block); err != nil {
-			t.Fatalf("SaveLastBlock(%d): %v", block, err)
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatalf("commit: %v", err)
-		}
-	}
-
-	// Unknown key starts at zero rather than erroring.
-	start, err := repo.GetLastBlock(ctx, key)
-	if err != nil {
-		t.Fatalf("GetLastBlock on empty table: %v", err)
-	}
-	if start != 0 {
-		t.Errorf("initial checkpoint = %d, want 0", start)
-	}
-
-	saveBlock(100)
-	if got, _ := repo.GetLastBlock(ctx, key); got != 100 {
-		t.Errorf("checkpoint after first save = %d, want 100", got)
-	}
-
-	// Moving forward advances the checkpoint.
-	saveBlock(250)
-	if got, _ := repo.GetLastBlock(ctx, key); got != 250 {
-		t.Errorf("checkpoint after advancing = %d, want 250", got)
-	}
-
-	// A stale/replayed write must not rewind progress.
-	saveBlock(50)
-	got, err := repo.GetLastBlock(ctx, key)
-	if err != nil {
-		t.Fatalf("GetLastBlock after stale write: %v", err)
-	}
-	if got != 250 {
-		t.Errorf("checkpoint after stale write = %d, want it to stay at 250", got)
-	}
-}

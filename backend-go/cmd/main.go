@@ -1,19 +1,13 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"log"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mroihn/ta-proj/backend-go/internal/chainquery"
 	"github.com/mroihn/ta-proj/backend-go/internal/config"
 	dbpkg "github.com/mroihn/ta-proj/backend-go/internal/db"
 	"github.com/mroihn/ta-proj/backend-go/internal/handler"
-	"github.com/mroihn/ta-proj/backend-go/internal/indexer"
-	"github.com/mroihn/ta-proj/backend-go/internal/indexer/blockchain"
-	idxhandler "github.com/mroihn/ta-proj/backend-go/internal/indexer/handler"
-	"github.com/mroihn/ta-proj/backend-go/internal/indexer/parser"
-	idxrepo "github.com/mroihn/ta-proj/backend-go/internal/indexer/repository"
 	"github.com/mroihn/ta-proj/backend-go/internal/middleware"
 	"github.com/mroihn/ta-proj/backend-go/internal/repository"
 	"github.com/mroihn/ta-proj/backend-go/internal/service"
@@ -34,13 +28,34 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
+	// On-chain reader: every read of contract state (manuscripts, reviews,
+	// comments, ...) goes straight to the chain, per request — no off-chain
+	// mirror. Reader construction fails fast if the RPC or ABIs are bad,
+	// since without it most of the API can't serve reads at all.
+	chainClient, err := chainquery.NewEthClientAdapter(cfg.RPCURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to RPC (%s): %v", cfg.RPCURL, err)
+	}
+	registryReader, err := chainquery.NewRegistryReader(chainClient, cfg.RegistryContractAddress, cfg.RegistryDeployBlock)
+	if err != nil {
+		log.Fatalf("Failed to build registry reader: %v", err)
+	}
+	oracleReader, err := chainquery.NewOracleReader(chainClient, cfg.ReviewOracleContractAddress, cfg.RegistryDeployBlock)
+	if err != nil {
+		log.Fatalf("Failed to build oracle reader: %v", err)
+	}
+	doiTokenReader, err := chainquery.NewDOITokenReader(chainClient, cfg.DOITokenContractAddress, cfg.RegistryDeployBlock)
+	if err != nil {
+		log.Fatalf("Failed to build DOI token reader: %v", err)
+	}
+
 	// Infrastructure
 	userRepo := repository.NewPostgresUserRepository(db)
-	msReader := repository.NewPostgresManuscriptReader(db)
-	sessionRepo := repository.NewPostgresSessionWalletRepository(db, userRepo)
-	editorRepo := repository.NewPostgresEditorRepository(db)
+	msReader := repository.NewChainManuscriptReader(registryReader, oracleReader)
+	sessionRepo := repository.NewPostgresSessionWalletRepository(db, userRepo, registryReader)
+	editorRepo := repository.NewPostgresEditorRepository(db, registryReader)
 	identityResolver := repository.NewIdentityResolver(db)
-	commentRepo := repository.NewCommentRepository(db)
+	commentRepo := repository.NewCommentRepository(db, registryReader, doiTokenReader)
 	pinata := service.NewPinataService(cfg.PinataJWT)
 	ethereum := service.NewEthereumService(cfg.RPCURL, cfg.OperatorPrivateKey, cfg.RegistryContractAddress)
 
@@ -56,53 +71,7 @@ func main() {
 	editorHandler := handler.NewEditorHandler(editorRepo, ethereum, pinata)
 	articleHandler := handler.NewArticleHandler(msReader, identityResolver, commentRepo, pinata)
 	userHandler := handler.NewUserHandler(userUC)
-
-	// Indexer (disabled if no registry address configured)
-	var idx *indexer.Indexer
-	if cfg.RegistryContractAddress != "" &&
-		cfg.RegistryContractAddress != "0x0000000000000000000000000000000000000000" {
-
-		rpcURL := firstOf(cfg.IndexerRPCWSS, cfg.RPCURL)
-		ethClient, err := blockchain.NewEthClientAdapter(rpcURL)
-		if err != nil {
-			log.Printf("Indexer: failed to connect to RPC (%s): %v — indexer disabled", rpcURL, err)
-		} else {
-			evtParser, err := parser.NewMultiContractParser(
-				cfg.RegistryContractAddress,
-				cfg.ReviewOracleContractAddress,
-				cfg.DOITokenContractAddress,
-			)
-			if err != nil {
-				log.Printf("Indexer: failed to parse ABIs: %v — indexer disabled", err)
-				ethClient.Close()
-			} else {
-				repo := idxrepo.NewPostgresIndexerRepository(db)
-				handlers := idxhandler.BuildHandlerMap(repo, ethClient, cfg.RegistryContractAddress)
-				idx = indexer.New(ethClient, evtParser, handlers, repo, db, indexer.Config{
-					RegistryAddress: cfg.RegistryContractAddress,
-					OracleAddress:   cfg.ReviewOracleContractAddress,
-					DOITokenAddress: cfg.DOITokenContractAddress,
-					StartBlock:      cfg.IndexerStartBlock,
-					PollIntervalMs:  cfg.IndexerPollIntervalMs,
-					UseWebSocket:    cfg.IndexerRPCWSS != "",
-				})
-
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				go func() {
-					if err := idx.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-						log.Printf("Indexer stopped: %v", err)
-					}
-				}()
-			}
-		}
-	}
-
-	var getIndexerStatus func(ctx context.Context) any
-	if idx != nil {
-		getIndexerStatus = func(ctx context.Context) any { return idx.Status(ctx) }
-	}
-	healthHandler := handler.NewHealthHandler(getIndexerStatus)
+	healthHandler := handler.NewHealthHandler(chainClient)
 
 	// Router
 	r := gin.Default()
@@ -178,13 +147,4 @@ func main() {
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
-}
-
-func firstOf(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }

@@ -8,16 +8,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type IndexerStatusProvider interface {
-	Status(ctx context.Context) interface{}
+type RPCPinger interface {
+	BlockNumber(ctx context.Context) (uint64, error)
 }
 
 type HealthHandler struct {
-	getStatus func(ctx context.Context) any
+	client RPCPinger
 }
 
-func NewHealthHandler(getStatus func(ctx context.Context) any) *HealthHandler {
-	return &HealthHandler{getStatus: getStatus}
+func NewHealthHandler(client RPCPinger) *HealthHandler {
+	return &HealthHandler{client: client}
 }
 
 func (h *HealthHandler) Health(c *gin.Context) {
@@ -25,10 +25,16 @@ func (h *HealthHandler) Health(c *gin.Context) {
 		"status":    "ok",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
-	if h.getStatus != nil {
-		resp["indexer"] = h.getStatus(c.Request.Context())
+	if h.client == nil {
+		resp["rpc"] = gin.H{"status": "disabled"}
 	} else {
-		resp["indexer"] = gin.H{"status": "disabled"}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if blockNumber, err := h.client.BlockNumber(ctx); err != nil {
+			resp["rpc"] = gin.H{"status": "unreachable", "error": err.Error()}
+		} else {
+			resp["rpc"] = gin.H{"status": "ok", "block_number": blockNumber}
+		}
 	}
 	c.JSON(http.StatusOK, resp)
 }

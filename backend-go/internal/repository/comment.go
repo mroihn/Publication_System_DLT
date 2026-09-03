@@ -3,7 +3,11 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"sort"
 	"time"
+
+	"github.com/mroihn/ta-proj/backend-go/internal/chainquery"
 )
 
 type CommentView struct {
@@ -16,24 +20,31 @@ type CommentView struct {
 	PostedAt         time.Time `json:"posted_at"`
 }
 
+// CommentRepository blends two sources: on-chain CommentPosted events (who
+// commented, when, and the content hash) and the off-chain comment_contents
+// table (the actual body text, which never touches the chain — only its
+// hash does). The table is not an on-chain mirror and stays.
 type CommentRepository struct {
-	db *sql.DB
+	db       *sql.DB
+	registry *chainquery.RegistryReader
+	doiToken *chainquery.DOITokenReader
 }
 
-func NewCommentRepository(db *sql.DB) *CommentRepository {
-	return &CommentRepository{db: db}
+func NewCommentRepository(db *sql.DB, registry *chainquery.RegistryReader, doiToken *chainquery.DOITokenReader) *CommentRepository {
+	return &CommentRepository{db: db, registry: registry, doiToken: doiToken}
 }
 
+// DOITokenID has no contract-view equivalent — doiTokenId is never stored on
+// the manuscript struct, only ever emitted as an event arg.
 func (r *CommentRepository) DOITokenID(ctx context.Context, msId uint64) (int64, bool, error) {
-	var id sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `SELECT doi_token_id FROM manuscripts WHERE ms_id = $1`, msId).Scan(&id)
-	if err == sql.ErrNoRows {
-		return 0, false, nil
-	}
+	logs, err := r.registry.LogsForManuscript(ctx, msId, "DOIMinted")
 	if err != nil {
 		return 0, false, err
 	}
-	return id.Int64, id.Valid, nil
+	if len(logs) == 0 {
+		return 0, false, nil
+	}
+	return chainquery.BigIntArg(logs[0].Args, "doiTokenId").Int64(), true, nil
 }
 
 func (r *CommentRepository) SaveContent(ctx context.Context, hash string, doiTokenID int64, cid, body string) error {
@@ -45,33 +56,44 @@ func (r *CommentRepository) SaveContent(ctx context.Context, hash string, doiTok
 	return err
 }
 
-// ListForDOI returns on-chain comments (from the indexer) joined with their
-// off-chain text, chronologically.
+// ListForDOI returns on-chain comments (from CommentPosted logs) joined with
+// their off-chain text by content hash, chronologically.
 func (r *CommentRepository) ListForDOI(ctx context.Context, doiTokenID int64) ([]CommentView, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT dc.commenter_address, dc.content_hash, COALESCE(dc.tx_hash,''),
-		        COALESCE(dc.block_number,0), dc.posted_at,
-		        COALESCE(cc.body,''), COALESCE(cc.cid,'')
-		 FROM doi_comments dc
-		 LEFT JOIN comment_contents cc ON cc.content_hash = dc.content_hash
-		 WHERE dc.doi_token_id = $1
-		 ORDER BY dc.posted_at`, doiTokenID)
+	logs, err := r.doiToken.CommentLogsForDOI(ctx, uint64(doiTokenID))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	sort.Slice(logs, func(i, j int) bool {
+		if logs[i].Raw.BlockNumber != logs[j].Raw.BlockNumber {
+			return logs[i].Raw.BlockNumber < logs[j].Raw.BlockNumber
+		}
+		return logs[i].Raw.Index < logs[j].Raw.Index
+	})
 
-	var out []CommentView
-	for rows.Next() {
-		var c CommentView
-		if err := rows.Scan(&c.CommenterAddress, &c.ContentHash, &c.TxHash,
-			&c.BlockNumber, &c.PostedAt, &c.Body, &c.CID); err != nil {
+	out := make([]CommentView, 0, len(logs))
+	for _, l := range logs {
+		hashBytes := chainquery.Bytes32Arg(l.Args, "hash")
+		hashHex := "0x" + hex.EncodeToString(hashBytes[:])
+
+		var body, cid sql.NullString
+		_ = r.db.QueryRowContext(ctx,
+			`SELECT body, cid FROM comment_contents WHERE content_hash = $1`, hashHex,
+		).Scan(&body, &cid)
+
+		t, err := chainquery.BlockTime(ctx, r.doiToken.Client(), l.Raw.BlockNumber)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, c)
+
+		out = append(out, CommentView{
+			CommenterAddress: chainquery.AddressArg(l.Args, "reader").Hex(),
+			ContentHash:      hashHex,
+			Body:             body.String,
+			CID:              cid.String,
+			TxHash:           l.Raw.TxHash.Hex(),
+			BlockNumber:      int64(l.Raw.BlockNumber),
+			PostedAt:         t,
+		})
 	}
-	if out == nil {
-		out = []CommentView{}
-	}
-	return out, rows.Err()
+	return out, nil
 }

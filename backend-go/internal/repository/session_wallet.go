@@ -1,10 +1,13 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/mroihn/ta-proj/backend-go/internal/chainquery"
 )
 
 // ReviewerSession is the burner wallet created for a (manuscript, reviewer) pair.
@@ -36,10 +39,11 @@ type SessionWalletRepository interface {
 type PostgresSessionWalletRepository struct {
 	db       *sql.DB
 	userRepo UserRepository
+	registry *chainquery.RegistryReader
 }
 
-func NewPostgresSessionWalletRepository(db *sql.DB, userRepo UserRepository) *PostgresSessionWalletRepository {
-	return &PostgresSessionWalletRepository{db: db, userRepo: userRepo}
+func NewPostgresSessionWalletRepository(db *sql.DB, userRepo UserRepository, registry *chainquery.RegistryReader) *PostgresSessionWalletRepository {
+	return &PostgresSessionWalletRepository{db: db, userRepo: userRepo, registry: registry}
 }
 
 func (r *PostgresSessionWalletRepository) SaveSubmissionWallet(userID, address string) error {
@@ -128,15 +132,17 @@ func (r *PostgresSessionWalletRepository) CreateReviewerSessionsForField(msId ui
 	return out, nil
 }
 
+// GetReviewerSessionsForUser reads the reviewer's own burner session wallets
+// from the off-chain reviewer_sessions table (unaffected — never mirrored
+// on-chain data), then fills in each assignment's current manuscript
+// status/metadata/cid and "did I review this round" flag directly from the
+// contract. hasReviewed() only reflects the *current* round (it's reset on
+// every revision), which is exactly what a reviewer's own assignment view
+// needs — no historical reconstruction required here, unlike OpenReview.
 func (r *PostgresSessionWalletRepository) GetReviewerSessionsForUser(userID, walletAddress string) ([]ReviewerSessionView, error) {
 	rows, err := r.db.Query(
-		`SELECT rs.ms_id, COALESCE(m.status, ''), rs.session_address, rs.session_privkey,
-		        COALESCE(m.metadata, ''), COALESCE(m.cid, ''),
-		        EXISTS(SELECT 1 FROM reviews rv
-		               WHERE rv.ms_id = rs.ms_id
-		                 AND lower(rv.reviewer_address) = lower(rs.session_address)) AS reviewed
+		`SELECT rs.ms_id, rs.session_address, rs.session_privkey
 		 FROM reviewer_sessions rs
-		 LEFT JOIN manuscripts m ON m.ms_id = rs.ms_id
 		 WHERE rs.user_id = $1 OR rs.main_address = $2
 		 ORDER BY rs.ms_id DESC`,
 		userID, walletAddress,
@@ -144,19 +150,45 @@ func (r *PostgresSessionWalletRepository) GetReviewerSessionsForUser(userID, wal
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var result []ReviewerSessionView
+	type row struct {
+		msID    uint64
+		address string
+		privKey string
+	}
+	var raw []row
 	for rows.Next() {
-		var v ReviewerSessionView
-		if err := rows.Scan(&v.MsID, &v.Status, &v.SessionAddress, &v.SessionPrivKey,
-			&v.Metadata, &v.CID, &v.Reviewed); err != nil {
+		var v row
+		if err := rows.Scan(&v.msID, &v.address, &v.privKey); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		result = append(result, v)
+		raw = append(raw, v)
 	}
-	if result == nil {
-		result = []ReviewerSessionView{}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return result, rows.Err()
+
+	ctx := context.Background()
+	result := make([]ReviewerSessionView, 0, len(raw))
+	for _, v := range raw {
+		m, err := r.registry.GetManuscript(ctx, v.msID)
+		if err != nil {
+			return nil, err
+		}
+		reviewed, err := r.registry.HasReviewed(ctx, v.msID, common.HexToAddress(v.address))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ReviewerSessionView{
+			MsID:           v.msID,
+			Status:         chainquery.StatusNames[m.Status],
+			SessionAddress: v.address,
+			SessionPrivKey: v.privKey,
+			Metadata:       m.Metadata,
+			CID:            m.CID,
+			Reviewed:       reviewed,
+		})
+	}
+	return result, nil
 }
