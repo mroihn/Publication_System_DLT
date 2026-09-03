@@ -45,8 +45,10 @@ func atoiDefault(s string, def int) int {
 }
 
 // finalDecisionStatuses are the manuscript statuses at which FR-08 permits
-// author/reviewer identity to be revealed (the review decision is final).
-// Anything earlier in the lifecycle (SUBMITTED, CHECKING, PENDING_EDITOR,
+// author identity to be revealed (the review decision is final). Reviewer
+// identity is never resolved, even at these statuses: anticipating eventual
+// disclosure could still bias a reviewer's verdict while reviewing. Anything
+// earlier in the lifecycle (SUBMITTED, CHECKING, PENDING_EDITOR,
 // UNDER_REVIEW, REVISION_REQUESTED) must stay anonymized.
 var finalDecisionStatuses = map[string]bool{
 	"ACCEPTED":  true,
@@ -109,10 +111,12 @@ func (h *ArticleHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total": total})
 }
 
-// OpenReview returns the per-version reviewer report. Author and reviewer
-// identities are only resolved to their real wallet/email once the manuscript
-// has reached a final decision (FR-08); earlier statuses get back anonymized
-// burner addresses.
+// OpenReview returns the per-version reviewer report. Author identity is only
+// resolved to the real wallet/email once the manuscript has reached a final
+// decision (FR-08); earlier statuses get back the anonymized burner address.
+// Reviewer identity is never resolved, at any status: revealing it even after
+// the decision is final would let reviewers anticipate disclosure and bias
+// their verdicts, so reviewers stay anonymized permanently.
 func (h *ArticleHandler) OpenReview(c *gin.Context) {
 	msId, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -130,11 +134,9 @@ func (h *ArticleHandler) OpenReview(c *gin.Context) {
 	}
 
 	decided := finalDecisionStatuses[or.Status]
+	// Reviewer identity is always anonymized, regardless of decision status.
 	resolve := func(addr string) repository.Identity {
-		if !decided {
-			return anonymizedIdentity(addr)
-		}
-		return h.identity.ResolveReviewer(addr)
+		return anonymizedIdentity(addr)
 	}
 
 	versions := make([]gin.H, len(or.Versions))

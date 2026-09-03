@@ -41,36 +41,6 @@ func (r *IdentityResolver) ResolveAuthor(address string) Identity {
 	return id
 }
 
-// ResolveReviewer maps a burner ReviewerSessionWallet to the registered reviewer,
-// falling back to the session's main_address and then the raw address.
-func (r *IdentityResolver) ResolveReviewer(sessionAddress string) Identity {
-	id := Identity{Address: sessionAddress, RealWallet: sessionAddress}
-	if sessionAddress == "" {
-		return id
-	}
-	var email, main sql.NullString
-	err := r.db.QueryRow(
-		`SELECT COALESCE(u.email, ''), rs.main_address
-		 FROM reviewer_sessions rs LEFT JOIN users u ON u.id = rs.user_id
-		 WHERE lower(rs.session_address) = lower($1) LIMIT 1`, sessionAddress,
-	).Scan(&email, &main)
-	if err == nil {
-		id.Email = email.String
-		if main.String != "" {
-			id.RealWallet = main.String
-		}
-		return id
-	}
-	// Fallback for reviewers whose real wallet was used on-chain directly.
-	var directEmail sql.NullString
-	if err := r.db.QueryRow(
-		`SELECT email FROM users WHERE lower(wallet_address) = lower($1) LIMIT 1`, sessionAddress,
-	).Scan(&directEmail); err == nil {
-		id.Email = directEmail.String
-	}
-	return id
-}
-
 // ResolveCommenter maps a reader's real wallet to their email when they are a
 // registered user; the wallet is already public.
 func (r *IdentityResolver) ResolveCommenter(address string) Identity {
