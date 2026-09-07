@@ -140,16 +140,19 @@ func summaryFromManuscript(m *chainquery.Manuscript) ManuscriptSummary {
 		Version:         int(m.Version),
 		AuthorAddress:   m.Author.Hex(),
 		PlagiarismScore: &score,
-		// SubmitTxHash/SubmitBlock/SubmitTimestamp/CreatedAt/UpdatedAt have no
+		// SubmitTxHash/SubmitBlock/SubmitTimestamp/CreatedAt have no
 		// contract-view equivalent (only in the ManuscriptSubmitted event log)
-		// and aren't worth an extra log query for every row of a list — left
-		// blank here; GetManuscriptByID (single resource) fills them in.
+		// — filled in by fetchAllSummaries from one batched log query shared
+		// across the whole list, not one query per row.
 	}
 }
 
 // fetchAllSummaries enumerates every manuscript ID and reads each one in
-// parallel. Called once per ListManuscriptsPaged/CountManuscripts/
-// ListManuscripts invocation — no caching, per the "always read live" design.
+// parallel, then fills in each summary's submission tx/block/timestamp from
+// a single batched ManuscriptSubmitted log query (one eth_getLogs call for
+// the whole list, not one per manuscript). Called once per
+// ListManuscriptsPaged/CountManuscripts/ListManuscripts invocation — no
+// caching, per the "always read live" design.
 func (r *ChainManuscriptReader) fetchAllSummaries(ctx context.Context) ([]ManuscriptSummary, error) {
 	next, err := r.registry.NextManuscriptID(ctx)
 	if err != nil {
@@ -178,11 +181,30 @@ func (r *ChainManuscriptReader) fetchAllSummaries(ctx context.Context) ([]Manusc
 			results[id] = summaryFromManuscript(m)
 		}(id)
 	}
+
+	submittedLogs, submitErr := r.registry.AllManuscriptSubmittedLogs(ctx)
+
 	wg.Wait()
 	select {
 	case err := <-errCh:
 		return nil, err
 	default:
+	}
+	if submitErr != nil {
+		return nil, submitErr
+	}
+
+	btc := newBlockTimeCache(ctx, r.registry.Client())
+	for _, l := range submittedLogs {
+		msId := chainquery.BigIntArg(l.Args, "msId").Uint64()
+		if msId >= uint64(len(results)) {
+			continue
+		}
+		t := btc.get(l.Raw.BlockNumber)
+		results[msId].SubmitTxHash = l.Raw.TxHash.Hex()
+		results[msId].SubmitBlock = int64(l.Raw.BlockNumber)
+		results[msId].SubmitTimestamp = &t
+		results[msId].CreatedAt = t
 	}
 
 	sort.Slice(results, func(i, j int) bool { return results[i].MsId > results[j].MsId })

@@ -161,6 +161,30 @@ func (r *RegistryReader) LogsForManuscript(ctx context.Context, msId uint64, eve
 	return decodeLogs(r.eventsABI, logs)
 }
 
+// AllManuscriptSubmittedLogs fetches every ManuscriptSubmitted event across
+// the whole contract history in one windowed query, so a list endpoint can
+// get every manuscript's submission tx/block/timestamp without an
+// eth_getLogs call per row.
+func (r *RegistryReader) AllManuscriptSubmittedLogs(ctx context.Context) ([]DecodedLog, error) {
+	ev, ok := r.eventsABI.Events["ManuscriptSubmitted"]
+	if !ok {
+		return nil, fmt.Errorf("unknown registry event %q", "ManuscriptSubmitted")
+	}
+	head, err := r.client.BlockNumber(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := ethereum.FilterQuery{
+		Addresses: []common.Address{r.address},
+		Topics:    [][]common.Hash{{ev.ID}},
+	}
+	logs, err := FetchLogsWindowed(ctx, r.client, q, r.deployBlock, head)
+	if err != nil {
+		return nil, err
+	}
+	return decodeLogs(r.eventsABI, logs)
+}
+
 // Client exposes the underlying RPC client for block-timestamp lookups
 // shared across readers (BlockTime is a free function, not tied to one
 // contract).
