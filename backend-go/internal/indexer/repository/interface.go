@@ -21,6 +21,7 @@ type IndexerRepository interface {
 	UpdateManuscriptCID(ctx context.Context, tx *sql.Tx, msId uint64, newCid string, version uint64) error
 	UpdateManuscriptDOI(ctx context.Context, tx *sql.Tx, msId uint64, doi string, doiTokenId uint64) error
 	UpdateManuscriptField(ctx context.Context, tx *sql.Tx, msId uint64, field string) error
+	AssignEditor(ctx context.Context, tx *sql.Tx, msId uint64) error
 	IncrementVerdictCount(ctx context.Context, tx *sql.Tx, msId uint64, verdict string) error
 	SetReviewers(ctx context.Context, tx *sql.Tx, msId uint64, reviewers []string, version uint64) error
 	InsertReview(ctx context.Context, tx *sql.Tx, review ReviewRow) error
@@ -41,6 +42,7 @@ type ManuscriptRow struct {
 	TxHash        string
 	BlockNumber   uint64
 	SubmittedAt   *time.Time // on-chain block timestamp; nil for pre-fix historical events
+	JournalID     *int64     // author's chosen journal, parsed from the signed metadata; nil if absent
 }
 
 type ReviewRow struct {

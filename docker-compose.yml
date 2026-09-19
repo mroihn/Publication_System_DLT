@@ -76,7 +76,7 @@ services:
     environment:
       - BACKEND_URL=http://backend:3001
       - ORACLE_SHARED_SECRET=${ORACLE_SHARED_SECRET:-oracle-dev-secret}
-      - REGISTRY_ADDRESS=${REGISTRY_CONTRACT_ADDRESS:-0x734e265E218ae9dF1CfBb8D2b5b5fDDa05527A4f}
+      - REGISTRY_ADDRESS=${REGISTRY_CONTRACT_ADDRESS:-0x750e098122550BBfFa2301cDd7653E7597Afb445}
     depends_on:
       - backend
     restart: unless-stopped

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log"
 	"math/big"
 	"reflect"
@@ -93,7 +94,7 @@ func (h *ManuscriptSubmittedHandler) Handle(ctx context.Context, tx *sql.Tx, eve
 
 	metadata := h.fetchMetadata(ctx, msId)
 
-	return h.repo.UpsertManuscript(ctx, tx, idxrepo.ManuscriptRow{
+	if err := h.repo.UpsertManuscript(ctx, tx, idxrepo.ManuscriptRow{
 		MsId:          msId,
 		AuthorAddress: author,
 		CID:           cid,
@@ -103,5 +104,25 @@ func (h *ManuscriptSubmittedHandler) Handle(ctx context.Context, tx *sql.Tx, eve
 		TxHash:        event.Raw.TxHash.Hex(),
 		BlockNumber:   event.Raw.BlockNumber,
 		SubmittedAt:   submittedAt,
-	})
+		JournalID:     journalIDFromMetadata(metadata),
+	}); err != nil {
+		return err
+	}
+
+	return h.repo.AssignEditor(ctx, tx, msId)
+}
+
+// journalIDFromMetadata reads the journal the author picked out of the metadata
+// JSON that was EIP-712 signed and stored on-chain. Manuscripts submitted before
+// journals existed (or with unparsable metadata) simply have no journal.
+func journalIDFromMetadata(metadata string) *int64 {
+	var parsed struct {
+		Journal struct {
+			ID *int64 `json:"id"`
+		} `json:"journal"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &parsed); err != nil {
+		return nil
+	}
+	return parsed.Journal.ID
 }

@@ -20,13 +20,16 @@ type FieldRequest struct {
 }
 
 type PendingManuscript struct {
-	MsID          uint64    `json:"ms_id"`
-	CID           string    `json:"cid"`
-	Metadata      string    `json:"metadata"`
-	Status        string    `json:"status"`
-	Field         *string   `json:"field"`
-	AuthorAddress string    `json:"author_address"`
-	CreatedAt     time.Time `json:"created_at"`
+	MsID             uint64    `json:"ms_id"`
+	CID              string    `json:"cid"`
+	Metadata         string    `json:"metadata"`
+	Status           string    `json:"status"`
+	Field            *string   `json:"field"`
+	AuthorAddress    string    `json:"author_address"`
+	CreatedAt        time.Time `json:"created_at"`
+	JournalName      *string   `json:"journal_name"`
+	JournalCategory  *string   `json:"journal_category"`
+	AssignedEditorID *string   `json:"assigned_editor_id"`
 }
 
 type EditorRepository interface {
@@ -36,7 +39,8 @@ type EditorRepository interface {
 	GetLatestFieldRequestForUser(userID string) (*FieldRequest, error)
 	MarkFieldRequestApproved(id int64, editorID string, fields []string) error
 	RejectFieldRequest(id int64, editorID string) error
-	ListManuscriptsByStatus(status string) ([]PendingManuscript, error)
+	ListManuscriptsByStatus(status, editorID string) ([]PendingManuscript, error)
+	GetManuscriptAssignment(msId uint64) (*string, bool, error)
 }
 
 type PostgresEditorRepository struct {
@@ -174,11 +178,18 @@ func (r *PostgresEditorRepository) RejectFieldRequest(id int64, editorID string)
 	return err
 }
 
-func (r *PostgresEditorRepository) ListManuscriptsByStatus(status string) ([]PendingManuscript, error) {
+// ListManuscriptsByStatus returns the manuscripts this editor is responsible
+// for: the ones assigned to them, plus any that ended up unassigned (no editor
+// covered the journal's category) so nothing is left unreachable.
+func (r *PostgresEditorRepository) ListManuscriptsByStatus(status, editorID string) ([]PendingManuscript, error) {
 	rows, err := r.db.Query(
-		`SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''),
-		        field, COALESCE(author_address,''), created_at
-		 FROM manuscripts WHERE status = $1 ORDER BY ms_id DESC`, status,
+		`SELECT m.ms_id, COALESCE(m.cid,''), COALESCE(m.metadata,''), COALESCE(m.status,''),
+		        m.field, COALESCE(m.author_address,''), m.created_at,
+		        j.name, j.category_slug, m.assigned_editor_id
+		 FROM manuscripts m
+		 LEFT JOIN journals j ON j.id = m.journal_id
+		 WHERE m.status = $1 AND (m.assigned_editor_id = $2 OR m.assigned_editor_id IS NULL)
+		 ORDER BY m.ms_id DESC`, status, editorID,
 	)
 	if err != nil {
 		return nil, err
@@ -188,7 +199,8 @@ func (r *PostgresEditorRepository) ListManuscriptsByStatus(status string) ([]Pen
 	var out []PendingManuscript
 	for rows.Next() {
 		var m PendingManuscript
-		if err := rows.Scan(&m.MsID, &m.CID, &m.Metadata, &m.Status, &m.Field, &m.AuthorAddress, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.MsID, &m.CID, &m.Metadata, &m.Status, &m.Field, &m.AuthorAddress, &m.CreatedAt,
+			&m.JournalName, &m.JournalCategory, &m.AssignedEditorID); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -197,4 +209,18 @@ func (r *PostgresEditorRepository) ListManuscriptsByStatus(status string) ([]Pen
 		out = []PendingManuscript{}
 	}
 	return out, rows.Err()
+}
+
+// GetManuscriptAssignment returns the assigned editor id for a manuscript. The
+// bool reports whether the manuscript exists; a nil id means it is unassigned.
+func (r *PostgresEditorRepository) GetManuscriptAssignment(msId uint64) (*string, bool, error) {
+	var editorID *string
+	err := r.db.QueryRow(`SELECT assigned_editor_id FROM manuscripts WHERE ms_id = $1`, msId).Scan(&editorID)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return editorID, true, nil
 }

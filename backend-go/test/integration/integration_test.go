@@ -119,6 +119,8 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 		"submission_wallets",
 		"reviewer_sessions",
 		"reviewer_field_requests",
+		"categories",
+		"journals",
 	}
 
 	for _, table := range expected {
@@ -374,5 +376,126 @@ func TestIndexerCheckpointNeverGoesBackwards(t *testing.T) {
 	}
 	if got != 250 {
 		t.Errorf("checkpoint after stale write = %d, want it to stay at 250", got)
+	}
+}
+
+// insertEditor creates an editor with a fixed set of verified categories.
+func insertEditor(t *testing.T, testDB *sql.DB, email string, fields string) string {
+	t.Helper()
+	var id string
+	err := testDB.QueryRow(
+		`INSERT INTO users (id, email, password_hash, role, verified_fields, updated_at)
+		 VALUES (gen_random_uuid(), $1, 'x', 'editor', `+fields+`, NOW())
+		 RETURNING id`, email,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert editor %s: %v", email, err)
+	}
+	return id
+}
+
+// journalID looks up a journal seeded by migration 012.
+func journalID(t *testing.T, testDB *sql.DB, name string) int64 {
+	t.Helper()
+	var id int64
+	if err := testDB.QueryRow(`SELECT id FROM journals WHERE name = $1`, name).Scan(&id); err != nil {
+		t.Fatalf("lookup journal %q: %v", name, err)
+	}
+	return id
+}
+
+// insertManuscript creates a minimal manuscript row targeting a journal.
+func insertManuscript(t *testing.T, testDB *sql.DB, msId uint64, journal int64) {
+	t.Helper()
+	_, err := testDB.Exec(
+		`INSERT INTO manuscripts (ms_id, author_address, cid, metadata, status, version, journal_id, updated_at)
+		 VALUES ($1, '0xauthor', 'Qm', '{}', 'CHECKING', 1, $2, NOW())`, msId, journal,
+	)
+	if err != nil {
+		t.Fatalf("insert manuscript %d: %v", msId, err)
+	}
+}
+
+func assignEditor(t *testing.T, testDB *sql.DB, repo *idxrepo.PostgresIndexerRepository, msId uint64) {
+	t.Helper()
+	tx, err := testDB.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := repo.AssignEditor(context.Background(), tx, msId); err != nil {
+		tx.Rollback()
+		t.Fatalf("AssignEditor(%d): %v", msId, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+func assignedEditor(t *testing.T, testDB *sql.DB, msId uint64) string {
+	t.Helper()
+	var id *string
+	if err := testDB.QueryRow(`SELECT assigned_editor_id FROM manuscripts WHERE ms_id = $1`, msId).Scan(&id); err != nil {
+		t.Fatalf("read assignment for %d: %v", msId, err)
+	}
+	if id == nil {
+		return ""
+	}
+	return *id
+}
+
+// TestAssignEditorMatchesJournalCategory covers the automatic editor-assignment
+// rule: prefer an editor whose verified fields cover the journal's category,
+// fall back to any editor, and never reassign a manuscript that already has one.
+func TestAssignEditorMatchesJournalCategory(t *testing.T) {
+	testDB, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Drop the editors seeded by migration 012 so the candidate pool is controlled.
+	if _, err := testDB.Exec(`DELETE FROM users WHERE role = 'editor'`); err != nil {
+		t.Fatalf("clear seeded editors: %v", err)
+	}
+	aiEditor := insertEditor(t, testDB, "ai-editor@test.local", `ARRAY['ai']`)
+	secEditor := insertEditor(t, testDB, "sec-editor@test.local", `ARRAY['computer-security']`)
+
+	repo := idxrepo.NewPostgresIndexerRepository(testDB)
+
+	// A journal in the AI category must go to the AI editor.
+	insertManuscript(t, testDB, 1, journalID(t, testDB, "Journal of Applied AI"))
+	assignEditor(t, testDB, repo, 1)
+	if got := assignedEditor(t, testDB, 1); got != aiEditor {
+		t.Errorf("ai manuscript: expected the ai editor %s, got %s", aiEditor, got)
+	}
+
+	// No editor covers data-science, so it falls back to whoever is available.
+	insertManuscript(t, testDB, 2, journalID(t, testDB, "Journal of Data Science"))
+	assignEditor(t, testDB, repo, 2)
+	if got := assignedEditor(t, testDB, 2); got != aiEditor && got != secEditor {
+		t.Errorf("unmatched manuscript: expected a fallback editor, got %q", got)
+	}
+
+	// Replaying the submission event must not move an assigned manuscript.
+	before := assignedEditor(t, testDB, 2)
+	assignEditor(t, testDB, repo, 2)
+	if after := assignedEditor(t, testDB, 2); after != before {
+		t.Errorf("reassigned on replay: was %s, now %s", before, after)
+	}
+}
+
+// TestAssignEditorWithoutEditorsLeavesUnassigned verifies a manuscript is never
+// stranded when no editor account exists — it stays unassigned and therefore
+// visible to every editor.
+func TestAssignEditorWithoutEditorsLeavesUnassigned(t *testing.T) {
+	testDB, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	if _, err := testDB.Exec(`DELETE FROM users WHERE role = 'editor'`); err != nil {
+		t.Fatalf("clear seeded editors: %v", err)
+	}
+	repo := idxrepo.NewPostgresIndexerRepository(testDB)
+
+	insertManuscript(t, testDB, 7, journalID(t, testDB, "Journal of Applied AI"))
+	assignEditor(t, testDB, repo, 7)
+	if got := assignedEditor(t, testDB, 7); got != "" {
+		t.Errorf("expected no assignment with zero editors, got %q", got)
 	}
 }

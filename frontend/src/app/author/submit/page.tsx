@@ -1,12 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { UploadCloud, FileText, Send, PenLine } from "lucide-react";
 import { useAuth } from "@/core/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/core/context/ToastContext";
 import { apiClient } from "@/core/services/api.client";
 import { generateSessionWallet, saveSubmissionKey, signTypedDataWith, getNonce } from "@/core/services/wallet";
+
+interface Journal {
+  id: number;
+  name: string;
+  category_slug: string;
+  category_label: string;
+}
 
 export default function SubmitManuscriptPage() {
   const { isAuthenticated: isConnected, isLoading } = useAuth();
@@ -16,8 +23,17 @@ export default function SubmitManuscriptPage() {
   const [title, setTitle] = useState("");
   const [abstract, setAbstract] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [journals, setJournals] = useState<Journal[]>([]);
+  const [journalId, setJournalId] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [step, setStep] = useState<"form" | "uploading" | "signing" | "submitting">("form");
+
+  useEffect(() => {
+    apiClient
+      .get<{ data: Journal[] }>("/journals")
+      .then((res) => setJournals(res.data.data))
+      .catch(() => setJournals([]));
+  }, []);
 
   if (isLoading) {
     return (
@@ -54,6 +70,8 @@ export default function SubmitManuscriptPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) return addToast("Please select a file to upload.", "error");
+    const journal = journals.find((j) => String(j.id) === journalId);
+    if (!journal) return addToast("Please choose a target journal.", "error");
 
     setIsSubmitting(true);
     try {
@@ -77,7 +95,13 @@ export default function SubmitManuscriptPage() {
       saveSubmissionKey(submissionAddress, privateKey);
 
       const nonce = await getNonce(submissionAddress);
-      const metadata = JSON.stringify({ title, abstract });
+      // The journal travels inside the signed metadata, so the author's choice of
+      // venue is part of what goes on-chain rather than an unsigned side-channel.
+      const metadata = JSON.stringify({
+        title,
+        abstract,
+        journal: { id: journal.id, name: journal.name, category: journal.category_slug },
+      });
 
       const signature = await signTypedDataWith(
         privateKey,
@@ -166,6 +190,31 @@ export default function SubmitManuscriptPage() {
             className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all resize-none shadow-sm"
             placeholder="Provide a concise summary of your research..."
           />
+        </div>
+
+        <div>
+          <label htmlFor="journal" className="block text-sm font-medium text-gray-700 mb-2">
+            Target Journal
+          </label>
+          <select
+            id="journal"
+            required
+            value={journalId}
+            onChange={(e) => setJournalId(e.target.value)}
+            className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm"
+          >
+            <option value="" disabled>
+              {journals.length ? "Select a journal…" : "Loading journals…"}
+            </option>
+            {journals.map((j) => (
+              <option key={j.id} value={j.id}>
+                {j.name} — {j.category_label}
+              </option>
+            ))}
+          </select>
+          <p className="text-gray-500 text-xs mt-1.5">
+            An editor specialising in this journal&apos;s category will be assigned automatically.
+          </p>
         </div>
 
         <div>

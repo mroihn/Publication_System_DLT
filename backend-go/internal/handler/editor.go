@@ -102,12 +102,11 @@ func (h *EditorHandler) DecideReviewerVerification(c *gin.Context) {
 		return
 	}
 
-	
 	if fr.WalletAddress == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "reviewer must bind a wallet before approval"})
 		return
 	}
-	
+
 	txHash, err := h.contract.VerifyReviewerFields(fr.WalletAddress, fr.Fields)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "on-chain verification failed: " + err.Error()})
@@ -123,7 +122,6 @@ func (h *EditorHandler) DecideReviewerVerification(c *gin.Context) {
 type reviewerFieldsRequest struct {
 	Fields []string `json:"fields"`
 }
-
 
 func (h *EditorHandler) GetReviewerSpecialization(c *gin.Context) {
 	user := c.MustGet("user").(*domain.User)
@@ -175,10 +173,11 @@ func (h *EditorHandler) SubmitReviewerFields(c *gin.Context) {
 }
 
 func (h *EditorHandler) ListPendingManuscripts(c *gin.Context) {
-	if _, ok := requireEditor(c); !ok {
+	editor, ok := requireEditor(c)
+	if !ok {
 		return
 	}
-	list, err := h.repo.ListManuscriptsByStatus("PENDING_EDITOR")
+	list, err := h.repo.ListManuscriptsByStatus("PENDING_EDITOR", editor.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -193,12 +192,27 @@ type editorReviewRequest struct {
 }
 
 func (h *EditorHandler) ReviewManuscript(c *gin.Context) {
-	if _, ok := requireEditor(c); !ok {
+	editor, ok := requireEditor(c)
+	if !ok {
 		return
 	}
 	msId, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid manuscript id"})
+		return
+	}
+	assignedTo, found, err := h.repo.GetManuscriptAssignment(msId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"message": "manuscript not found"})
+		return
+	}
+	// Unassigned manuscripts stay open to any editor; an assigned one belongs to its editor.
+	if assignedTo != nil && *assignedTo != editor.ID {
+		c.JSON(http.StatusForbidden, gin.H{"message": "manuscript is assigned to another editor"})
 		return
 	}
 	var req editorReviewRequest

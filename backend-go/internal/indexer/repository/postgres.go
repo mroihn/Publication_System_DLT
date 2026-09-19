@@ -56,10 +56,10 @@ func (r *PostgresIndexerRepository) SaveLastBlock(ctx context.Context, tx *sql.T
 
 func (r *PostgresIndexerRepository) UpsertManuscript(ctx context.Context, tx *sql.Tx, ms ManuscriptRow) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO manuscripts (ms_id, author_address, cid, metadata, status, version, submit_tx_hash, submit_block, submit_timestamp, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+		`INSERT INTO manuscripts (ms_id, author_address, cid, metadata, status, version, submit_tx_hash, submit_block, submit_timestamp, journal_id, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
 		 ON CONFLICT (ms_id) DO NOTHING`,
-		ms.MsId, ms.AuthorAddress, ms.CID, ms.Metadata, ms.Status, ms.Version, ms.TxHash, ms.BlockNumber, ms.SubmittedAt,
+		ms.MsId, ms.AuthorAddress, ms.CID, ms.Metadata, ms.Status, ms.Version, ms.TxHash, ms.BlockNumber, ms.SubmittedAt, ms.JournalID,
 	)
 	return err
 }
@@ -110,6 +110,27 @@ func (r *PostgresIndexerRepository) UpdateManuscriptField(ctx context.Context, t
 	_, err := tx.ExecContext(ctx,
 		`UPDATE manuscripts SET field = $1, updated_at = NOW() WHERE ms_id = $2`,
 		field, msId,
+	)
+	return err
+}
+
+// AssignEditor picks the editor who will desk-review this manuscript: at random
+// among editors whose verified_fields cover the chosen journal's category, and
+// failing that at random among all editors. Only ever fills an empty slot, so
+// replaying the submission event never reassigns an in-flight manuscript. With
+// no editors at all the manuscript stays unassigned and remains visible to every
+// editor rather than being stranded.
+func (r *PostgresIndexerRepository) AssignEditor(ctx context.Context, tx *sql.Tx, msId uint64) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE manuscripts m SET assigned_editor_id = COALESCE(
+		   (SELECT u.id FROM users u
+		      JOIN journals j ON j.id = m.journal_id
+		     WHERE u.role = 'editor' AND j.category_slug = ANY(u.verified_fields)
+		     ORDER BY random() LIMIT 1),
+		   (SELECT u.id FROM users u WHERE u.role = 'editor' ORDER BY random() LIMIT 1)
+		 ), updated_at = NOW()
+		 WHERE m.ms_id = $1 AND m.assigned_editor_id IS NULL`,
+		msId,
 	)
 	return err
 }
