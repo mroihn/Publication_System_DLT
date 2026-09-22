@@ -53,6 +53,7 @@ type ManuscriptSummary struct {
 	SubmitTimestamp *time.Time `json:"submit_timestamp"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+	RejectionReason *string    `json:"rejection_reason"`
 }
 
 type ManuscriptReviewer struct {
@@ -110,6 +111,24 @@ type ManuscriptDetail struct {
 	Events          []ProcessedEvent     `json:"events"`
 }
 
+// rejectionReasonExpr tells apart the three ways a manuscript reaches REJECTED.
+// Each one emits the final DecisionMade in the same transaction as its trigger:
+// the editor's EditorReviewed, the last reviewer's ReviewSubmitted, or the
+// oracle's PlagiarismCheckFulfilled. NULL when not rejected or not yet indexed.
+const rejectionReasonExpr = `CASE WHEN m.status = 'REJECTED' THEN (
+	SELECT CASE
+		WHEN bool_or(s.event_name = 'EditorReviewed') THEN 'EDITOR'
+		WHEN bool_or(s.event_name = 'ReviewSubmitted') THEN 'PEER_REVIEW'
+		WHEN bool_or(s.event_name = 'PlagiarismCheckFulfilled') THEN 'PLAGIARISM'
+	END
+	FROM processed_events s
+	WHERE s.tx_hash = (
+		SELECT d.tx_hash FROM processed_events d
+		WHERE d.ms_id = m.ms_id AND d.event_name = 'DecisionMade'
+		ORDER BY d.block_number DESC, d.log_index DESC LIMIT 1
+	)
+) END`
+
 type PostgresManuscriptReader struct {
 	db *sql.DB
 }
@@ -123,8 +142,8 @@ func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]Manus
 		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
 		       COALESCE(author_address,''), plagiarism_score,
 		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
-		       submit_timestamp, created_at, updated_at
-		FROM manuscripts ORDER BY ms_id DESC
+		       submit_timestamp, created_at, updated_at, `+rejectionReasonExpr+`
+		FROM manuscripts m ORDER BY ms_id DESC
 	`)
 	if err != nil {
 		return nil, err
@@ -138,7 +157,7 @@ func (r *PostgresManuscriptReader) ListManuscripts(ctx context.Context) ([]Manus
 			&ms.MsId, &ms.CID, &ms.Metadata, &ms.Status, &ms.Version,
 			&ms.AuthorAddress, &ms.PlagiarismScore,
 			&ms.SubmitTxHash, &ms.SubmitBlock,
-			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt,
+			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt, &ms.RejectionReason,
 		); err != nil {
 			return nil, err
 		}
@@ -155,8 +174,8 @@ func (r *PostgresManuscriptReader) ListManuscriptsPaged(ctx context.Context, lim
 		SELECT ms_id, COALESCE(cid,''), COALESCE(metadata,''), COALESCE(status,''), version,
 		       COALESCE(author_address,''), plagiarism_score,
 		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
-		       submit_timestamp, created_at, updated_at
-		FROM manuscripts`
+		       submit_timestamp, created_at, updated_at, `+rejectionReasonExpr+`
+		FROM manuscripts m`
 	args := []any{limit, offset}
 	if status != "" {
 		query += ` WHERE status = $3`
@@ -176,7 +195,7 @@ func (r *PostgresManuscriptReader) ListManuscriptsPaged(ctx context.Context, lim
 			&ms.MsId, &ms.CID, &ms.Metadata, &ms.Status, &ms.Version,
 			&ms.AuthorAddress, &ms.PlagiarismScore,
 			&ms.SubmitTxHash, &ms.SubmitBlock,
-			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt,
+			&ms.SubmitTimestamp, &ms.CreatedAt, &ms.UpdatedAt, &ms.RejectionReason,
 		); err != nil {
 			return nil, err
 		}
@@ -299,14 +318,14 @@ func (r *PostgresManuscriptReader) GetManuscriptByID(ctx context.Context, msId u
 		       COALESCE(author_address,''), plagiarism_score, field, doi, doi_token_id,
 		       accept_count, reject_count, revise_count,
 		       COALESCE(submit_tx_hash,''), COALESCE(submit_block,0),
-		       submit_timestamp, created_at, updated_at
-		FROM manuscripts WHERE ms_id = $1
+		       submit_timestamp, created_at, updated_at, `+rejectionReasonExpr+`
+		FROM manuscripts m WHERE ms_id = $1
 	`, msId).Scan(
 		&d.MsId, &d.CID, &d.Metadata, &d.Status, &d.Version,
 		&d.AuthorAddress, &d.PlagiarismScore, &d.Field, &d.DOI, &d.DOITokenID,
 		&d.AcceptCount, &d.RejectCount, &d.ReviseCount,
 		&d.SubmitTxHash, &d.SubmitBlock,
-		&d.SubmitTimestamp, &d.CreatedAt, &d.UpdatedAt,
+		&d.SubmitTimestamp, &d.CreatedAt, &d.UpdatedAt, &d.RejectionReason,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

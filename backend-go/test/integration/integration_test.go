@@ -499,3 +499,70 @@ func TestAssignEditorWithoutEditorsLeavesUnassigned(t *testing.T) {
 		t.Errorf("expected no assignment with zero editors, got %q", got)
 	}
 }
+
+// TestRejectionReasonFollowsFinalDecision checks that a rejected manuscript is
+// attributed to whatever triggered its final DecisionMade — editor desk review,
+// reviewer majority, or the plagiarism check — even when earlier rounds had
+// other events (a revised manuscript that was reviewed once, then desk-rejected).
+func TestRejectionReasonFollowsFinalDecision(t *testing.T) {
+	testDB, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tx := func(n int) string { return fmt.Sprintf("0x%064x", n) }
+	addMs := func(msId uint64, status string) {
+		if _, err := testDB.Exec(
+			`INSERT INTO manuscripts (ms_id, author_address, cid, metadata, status, version, updated_at)
+			 VALUES ($1, '0xauthor', 'Qm', '{}', $2, 1, NOW())`, msId, status); err != nil {
+			t.Fatalf("insert manuscript %d: %v", msId, err)
+		}
+	}
+	addEvent := func(msId uint64, txn, logIndex int, block uint64, name string) {
+		if _, err := testDB.Exec(
+			`INSERT INTO processed_events (tx_hash, log_index, block_number, event_name, contract_addr, ms_id)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			tx(txn), logIndex, block, name, fmt.Sprintf("0x%040x", 1), msId); err != nil {
+			t.Fatalf("insert event %s: %v", name, err)
+		}
+	}
+
+	addMs(1, "REJECTED")
+	addEvent(1, 1, 0, 100, "EditorReviewed")
+	addEvent(1, 1, 1, 100, "DecisionMade")
+
+	addMs(2, "REJECTED")
+	addEvent(2, 2, 0, 200, "ReviewSubmitted")
+	addEvent(2, 2, 1, 200, "DecisionMade")
+
+	addMs(3, "REJECTED")
+	addEvent(3, 3, 0, 300, "PlagiarismCheckFulfilled")
+	addEvent(3, 3, 1, 300, "DecisionMade")
+
+	addMs(4, "REJECTED")
+	addEvent(4, 4, 0, 400, "ReviewSubmitted")
+	addEvent(4, 4, 1, 400, "DecisionMade")
+	addEvent(4, 5, 0, 450, "EditorReviewed")
+	addEvent(4, 5, 1, 450, "DecisionMade")
+
+	addMs(5, "UNDER_REVIEW")
+	addEvent(5, 6, 0, 500, "EditorReviewed")
+	addEvent(5, 6, 1, 500, "DecisionMade")
+
+	list, err := repository.NewPostgresManuscriptReader(testDB).ListManuscripts(context.Background())
+	if err != nil {
+		t.Fatalf("ListManuscripts: %v", err)
+	}
+	got := map[uint64]string{}
+	for _, m := range list {
+		if m.RejectionReason != nil {
+			got[m.MsId] = *m.RejectionReason
+		} else {
+			got[m.MsId] = ""
+		}
+	}
+	want := map[uint64]string{1: "EDITOR", 2: "PEER_REVIEW", 3: "PLAGIARISM", 4: "EDITOR", 5: ""}
+	for msId, w := range want {
+		if got[msId] != w {
+			t.Errorf("manuscript %d: rejection_reason = %q, want %q", msId, got[msId], w)
+		}
+	}
+}

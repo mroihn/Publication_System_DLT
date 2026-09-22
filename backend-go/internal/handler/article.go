@@ -106,6 +106,7 @@ func (h *ArticleHandler) List(c *gin.Context) {
 			"author":           author,
 			"submit_timestamp": m.SubmitTimestamp,
 			"created_at":       m.CreatedAt,
+			"rejection_reason": m.RejectionReason,
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": data, "page": page, "limit": limit, "total": total})
