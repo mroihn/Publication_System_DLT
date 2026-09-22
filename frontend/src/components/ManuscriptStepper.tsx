@@ -16,12 +16,26 @@ function stepStatus(currentStatus: string, step: string): "past" | "current" | "
   return "upcoming";
 }
 
-export function ManuscriptStepper({ status }: { status: string }) {
+const REJECTION_MESSAGES: Record<string, string> = {
+  EDITOR: "This manuscript was desk-rejected by the editor during screening.",
+  PEER_REVIEW: "This manuscript has been rejected by peer review consensus.",
+  PLAGIARISM: "This manuscript was rejected because its plagiarism score exceeded the 30% threshold.",
+};
+
+export function ManuscriptStepper({
+  status,
+  rejectionReason,
+}: {
+  status: string;
+  rejectionReason?: string | null;
+}) {
   if (status === "REJECTED") {
     return (
       <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center text-red-800 shadow-sm">
         <XCircle className="w-6 h-6 mr-3 flex-shrink-0" />
-        <span className="font-medium">This manuscript has been rejected by peer review consensus.</span>
+        <span className="font-medium">
+          {(rejectionReason && REJECTION_MESSAGES[rejectionReason]) ?? "This manuscript has been rejected."}
+        </span>
       </div>
     );
   }

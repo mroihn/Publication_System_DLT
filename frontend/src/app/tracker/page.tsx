@@ -17,6 +17,7 @@ interface ManuscriptSummary {
   submit_block: number;
   created_at: string;
   updated_at: string;
+  rejection_reason?: string | null;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -122,7 +123,7 @@ export default function StatusTrackerPage() {
                 </Link>
               </div>
 
-              <ManuscriptStepper status={ms.status} />
+              <ManuscriptStepper status={ms.status} rejectionReason={ms.rejection_reason} />
             </div>
           ))}
         </div>

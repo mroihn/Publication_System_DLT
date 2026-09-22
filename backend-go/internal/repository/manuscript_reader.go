@@ -55,6 +55,7 @@ type ManuscriptSummary struct {
 	SubmitTimestamp *time.Time `json:"submit_timestamp"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+	RejectionReason *string    `json:"rejection_reason"`
 }
 
 type ManuscriptReviewer struct {
@@ -140,11 +141,34 @@ func summaryFromManuscript(m *chainquery.Manuscript) ManuscriptSummary {
 		Version:         int(m.Version),
 		AuthorAddress:   m.Author.Hex(),
 		PlagiarismScore: &score,
+		RejectionReason: rejectionReason(m),
 		// SubmitTxHash/SubmitBlock/SubmitTimestamp/CreatedAt have no
 		// contract-view equivalent (only in the ManuscriptSubmitted event log)
 		// — filled in by fetchAllSummaries from one batched log query shared
 		// across the whole list, not one query per row.
 	}
+}
+
+// plagiarismThreshold mirrors PublicationRegistry.PLAGIARISM_THRESHOLD.
+const plagiarismThreshold = 30
+
+// rejectionReason tells apart the three ways a manuscript reaches REJECTED
+// using only the contract's current state. Review counters are reset on every
+// revision, so they describe the final round alone: a failing plagiarism score
+// means the oracle rejected it, reviews in this round mean the reviewers did,
+// and a rejection with neither can only be the editor's desk review.
+func rejectionReason(m *chainquery.Manuscript) *string {
+	if chainquery.StatusNames[m.Status] != "REJECTED" {
+		return nil
+	}
+	reason := "EDITOR"
+	switch {
+	case m.PlagiarismScore > plagiarismThreshold:
+		reason = "PLAGIARISM"
+	case m.ReviewCount > 0:
+		reason = "PEER_REVIEW"
+	}
+	return &reason
 }
 
 // fetchAllSummaries enumerates every manuscript ID and reads each one in
