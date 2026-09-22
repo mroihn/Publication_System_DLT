@@ -96,5 +96,3 @@ jobs:
       - name: Build (main server)
         run: go build -v -o /dev/null ./cmd/main.go
 
-      - name: Build (replay command)
-        run: go build -v -o /dev/null ./cmd/replay/main.go
