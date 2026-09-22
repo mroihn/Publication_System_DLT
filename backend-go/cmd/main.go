@@ -56,6 +56,7 @@ func main() {
 	editorRepo := repository.NewPostgresEditorRepository(db, registryReader)
 	identityResolver := repository.NewIdentityResolver(db)
 	commentRepo := repository.NewCommentRepository(db, registryReader, doiTokenReader)
+	journalRepo := repository.NewJournalRepository(db)
 	pinata := service.NewPinataService(cfg.PinataJWT)
 	ethereum := service.NewEthereumService(cfg.RPCURL, cfg.OperatorPrivateKey, cfg.RegistryContractAddress)
 
@@ -71,6 +72,7 @@ func main() {
 	editorHandler := handler.NewEditorHandler(editorRepo, ethereum, pinata)
 	articleHandler := handler.NewArticleHandler(msReader, identityResolver, commentRepo, pinata)
 	userHandler := handler.NewUserHandler(userUC)
+	journalHandler := handler.NewJournalHandler(journalRepo)
 	healthHandler := handler.NewHealthHandler(chainClient)
 
 	// Router
@@ -105,6 +107,8 @@ func main() {
 			users.PATCH("/wallet-bind", jwtMW, userHandler.BindWallet)
 			users.PATCH("/identity-verify", jwtMW, userHandler.VerifyIdentity)
 		}
+
+		v1.GET("/journals", journalHandler.List)
 
 		manuscripts := v1.Group("/manuscripts")
 		{

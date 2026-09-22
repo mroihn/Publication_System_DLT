@@ -43,6 +43,9 @@ interface PendingManuscript {
   field: string | null;
   author_address: string;
   created_at: string;
+  journal_name: string | null;
+  journal_category: string | null;
+  assigned_editor_id: string | null;
 }
 
 function truncate(addr: string) {
@@ -119,9 +122,9 @@ export default function EditorDashboardPage() {
   );
 
   const reviewManuscript = useCallback(
-    async (msId: number, approve: boolean) => {
+    async (msId: number, approve: boolean, field: string) => {
       const form = screen[msId] ?? { field: "", message: "" };
-      if (approve && !form.field) {
+      if (approve && !field) {
         addToast("Select a field to approve.", "error");
         return;
       }
@@ -129,7 +132,7 @@ export default function EditorDashboardPage() {
       try {
         await apiClient.post(`/editor/manuscripts/${msId}/review`, {
           approve,
-          field: form.field,
+          field,
           message: form.message,
         });
         addToast(
@@ -286,7 +289,7 @@ export default function EditorDashboardPage() {
         ) : (
           <div className="space-y-4">
             {manuscripts.map((m) => {
-              const form = screen[m.ms_id] ?? { field: "", message: "" };
+              const form = screen[m.ms_id] ?? { field: m.journal_category ?? "", message: "" };
               const setForm = (patch: Partial<{ field: string; message: string }>) =>
                 setScreen((s) => ({ ...s, [m.ms_id]: { ...form, ...patch } }));
               return (
@@ -299,6 +302,12 @@ export default function EditorDashboardPage() {
                       <p className="font-bold text-gray-900">
                         #{m.ms_id} — {parseTitle(m.metadata)}
                       </p>
+                      {m.journal_name && (
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          Submitted to <span className="font-medium text-gray-700">{m.journal_name}</span>
+                          {m.journal_category ? ` · ${fieldLabel(m.journal_category)}` : ""}
+                        </p>
+                      )}
                       <p className="text-xs text-gray-400">
                         by {truncate(m.author_address)} ·{" "}
                         <a
@@ -316,6 +325,11 @@ export default function EditorDashboardPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
                       Field of study
+                      {m.journal_category && (
+                        <span className="ml-1.5 font-normal text-gray-400">
+                          (pre-filled from the journal — change it if the manuscript is mis-filed)
+                        </span>
+                      )}
                     </label>
                     <div className="flex flex-wrap gap-2">
                       {FIELDS.map((f) => {
@@ -349,7 +363,7 @@ export default function EditorDashboardPage() {
 
                   <div className="flex justify-end gap-2">
                     <button
-                      onClick={() => reviewManuscript(m.ms_id, false)}
+                      onClick={() => reviewManuscript(m.ms_id, false, form.field)}
                       disabled={busy === `m-${m.ms_id}`}
                       className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 text-gray-700 text-sm font-medium rounded-lg transition-colors"
                     >
@@ -357,7 +371,7 @@ export default function EditorDashboardPage() {
                       Desk-Reject
                     </button>
                     <button
-                      onClick={() => reviewManuscript(m.ms_id, true)}
+                      onClick={() => reviewManuscript(m.ms_id, true, form.field)}
                       disabled={busy === `m-${m.ms_id}` || !form.field}
                       className="inline-flex items-center gap-1.5 px-5 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors"
                     >

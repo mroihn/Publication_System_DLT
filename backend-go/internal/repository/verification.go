@@ -23,13 +23,16 @@ type FieldRequest struct {
 }
 
 type PendingManuscript struct {
-	MsID          uint64    `json:"ms_id"`
-	CID           string    `json:"cid"`
-	Metadata      string    `json:"metadata"`
-	Status        string    `json:"status"`
-	Field         *string   `json:"field"`
-	AuthorAddress string    `json:"author_address"`
-	CreatedAt     time.Time `json:"created_at"`
+	MsID             uint64    `json:"ms_id"`
+	CID              string    `json:"cid"`
+	Metadata         string    `json:"metadata"`
+	Status           string    `json:"status"`
+	Field            *string   `json:"field"`
+	AuthorAddress    string    `json:"author_address"`
+	CreatedAt        time.Time `json:"created_at"`
+	JournalName      *string   `json:"journal_name"`
+	JournalCategory  *string   `json:"journal_category"`
+	AssignedEditorID *string   `json:"assigned_editor_id"`
 }
 
 type EditorRepository interface {
@@ -39,7 +42,8 @@ type EditorRepository interface {
 	GetLatestFieldRequestForUser(userID string) (*FieldRequest, error)
 	MarkFieldRequestApproved(id int64, editorID string, fields []string) error
 	RejectFieldRequest(id int64, editorID string) error
-	ListManuscriptsByStatus(status string) ([]PendingManuscript, error)
+	ListManuscriptsByStatus(status, editorID string) ([]PendingManuscript, error)
+	GetManuscriptAssignment(msId uint64) (*string, bool, error)
 }
 
 type PostgresEditorRepository struct {
@@ -181,8 +185,9 @@ func (r *PostgresEditorRepository) RejectFieldRequest(id int64, editorID string)
 // ListManuscriptsByStatus enumerates every manuscript ID and reads each one
 // directly from the contract, filtering by status in memory — the contract
 // has no "list by status" query. Acceptable at today's manuscript count;
-// does not scale indefinitely (see Bab V Keterbatasan).
-func (r *PostgresEditorRepository) ListManuscriptsByStatus(status string) ([]PendingManuscript, error) {
+// does not scale indefinitely (see Bab V Keterbatasan). Only manuscripts
+// assigned to this editor, or still unassigned, are returned.
+func (r *PostgresEditorRepository) ListManuscriptsByStatus(status, editorID string) ([]PendingManuscript, error) {
 	ctx := context.Background()
 	next, err := r.registry.NextManuscriptID(ctx)
 	if err != nil {
@@ -198,20 +203,97 @@ func (r *PostgresEditorRepository) ListManuscriptsByStatus(status string) ([]Pen
 		if chainquery.StatusNames[m.Status] != status {
 			continue
 		}
+		journalID := journalIDFromMetadata(m.Metadata)
+		assigned, err := r.ensureAssignment(m.ID, journalID)
+		if err != nil {
+			return nil, err
+		}
+		if assigned != nil && *assigned != editorID {
+			continue
+		}
 		var field *string
 		if m.Field != "" {
 			f := m.Field
 			field = &f
 		}
-		out = append(out, PendingManuscript{
-			MsID:          m.ID,
-			CID:           m.CID,
-			Metadata:      m.Metadata,
-			Status:        chainquery.StatusNames[m.Status],
-			Field:         field,
-			AuthorAddress: m.Author.Hex(),
-		})
+		pm := PendingManuscript{
+			MsID:             m.ID,
+			CID:              m.CID,
+			Metadata:         m.Metadata,
+			Status:           chainquery.StatusNames[m.Status],
+			Field:            field,
+			AuthorAddress:    m.Author.Hex(),
+			AssignedEditorID: assigned,
+		}
+		if journalID != nil {
+			var name, category string
+			err := r.db.QueryRow(`SELECT name, category_slug FROM journals WHERE id = $1`, *journalID).Scan(&name, &category)
+			if err == nil {
+				pm.JournalName, pm.JournalCategory = &name, &category
+			} else if err != sql.ErrNoRows {
+				return nil, err
+			}
+		}
+		out = append(out, pm)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].MsID > out[j].MsID })
 	return out, nil
+}
+
+// GetManuscriptAssignment returns the editor responsible for a manuscript,
+// assigning one first if none has been chosen yet. The bool reports whether
+// the manuscript exists; a nil id means no editor account exists at all.
+func (r *PostgresEditorRepository) GetManuscriptAssignment(msId uint64) (*string, bool, error) {
+	ctx := context.Background()
+	next, err := r.registry.NextManuscriptID(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if msId >= next {
+		return nil, false, nil
+	}
+	m, err := r.registry.GetManuscript(ctx, msId)
+	if err != nil {
+		return nil, false, err
+	}
+	assigned, err := r.ensureAssignment(msId, journalIDFromMetadata(m.Metadata))
+	return assigned, true, err
+}
+
+func (r *PostgresEditorRepository) ensureAssignment(msId uint64, journalID *int64) (*string, error) {
+	if err := AssignEditor(r.db, msId, journalID); err != nil {
+		return nil, err
+	}
+	var editorID string
+	err := r.db.QueryRow(`SELECT assigned_editor_id FROM manuscript_assignments WHERE ms_id = $1`, msId).Scan(&editorID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &editorID, nil
+}
+
+// AssignEditor picks the editor who will desk-review a manuscript: at random
+// among editors whose verified_fields cover the chosen journal's category, and
+// failing that at random among all editors. It is assigned lazily, the first
+// time an editor lists or reviews the manuscript, since there is no indexer to
+// react to ManuscriptSubmitted. The ms_id primary key makes concurrent calls
+// safe and keeps the first choice. With no editors at all nothing is stored,
+// so the manuscript stays visible to every editor until one exists.
+func AssignEditor(db *sql.DB, msId uint64, journalID *int64) error {
+	_, err := db.Exec(
+		`INSERT INTO manuscript_assignments (ms_id, assigned_editor_id)
+		 SELECT $1, pick.editor_id FROM (SELECT COALESCE(
+		   (SELECT u.id FROM users u JOIN journals j ON j.id = $2::int
+		     WHERE u.role = 'editor' AND j.category_slug = ANY(u.verified_fields)
+		     ORDER BY random() LIMIT 1),
+		   (SELECT u.id FROM users u WHERE u.role = 'editor' ORDER BY random() LIMIT 1)
+		 ) AS editor_id) pick
+		 WHERE pick.editor_id IS NOT NULL
+		 ON CONFLICT (ms_id) DO NOTHING`,
+		msId, journalID,
+	)
+	return err
 }

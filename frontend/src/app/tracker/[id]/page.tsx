@@ -79,6 +79,7 @@ interface ManuscriptDetail {
   submit_block: number;
   created_at: string;
   updated_at: string;
+  rejection_reason?: string | null;
   reviewers: Reviewer[];
   reviews: Review[];
   revisions: Revision[];
@@ -396,7 +397,7 @@ export default function ManuscriptDetailPage() {
       {/* Progress stepper */}
       <div className="bg-white border border-gray-200 rounded-3xl p-8 shadow-sm">
         <h2 className="text-lg font-bold text-gray-900 mb-6">Publication Progress</h2>
-        <ManuscriptStepper status={ms.status} />
+        <ManuscriptStepper status={ms.status} rejectionReason={ms.rejection_reason} />
       </div>
 
       {/* Pay publication fee → publish (author action, status ACCEPTED) */}

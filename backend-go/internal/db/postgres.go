@@ -46,6 +46,9 @@ var migration011 string
 //go:embed migrations/012_drop_onchain_mirror_tables.up.sql
 var migration012 string
 
+//go:embed migrations/013_journals.up.sql
+var migration013 string
+
 func Open(cfg *config.Config) (*sql.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
@@ -65,7 +68,7 @@ func Open(cfg *config.Config) (*sql.DB, error) {
 }
 
 func RunMigrations(db *sql.DB) error {
-	for _, sql := range []string{migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012} {
+	for _, sql := range []string{migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012, migration013} {
 		if _, err := db.Exec(sql); err != nil {
 			return err
 		}
